@@ -1,0 +1,76 @@
+name: Go Checks
+
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+
+permissions: read-all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.after }}
+  cancel-in-progress: true
+
+jobs:
+  go-mod:
+    name: Check Go Modules
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check module vendoring
+        run: |
+          go mod tidy
+          go mod vendor
+          test -z "$(git status --porcelain)" || \
+            (echo "please run 'go mod tidy && go mod vendor' and commit the result"; exit 1)
+
+  golangci:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          skip-cache: true
+          args: "--verbose --modules-download-mode=vendor"
+
+  go-test:
+    name: Unit Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run tests
+        run: go test -v -count=1 -timeout=5m ./pkg/... ./daemon/...

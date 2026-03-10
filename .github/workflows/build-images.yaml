@@ -20,13 +20,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: cilium-agent
+          - name: constellation-agent
             dockerfile: ./images/cilium/Dockerfile
 
-          - name: cilium-operator
+          - name: constellation-operator
             dockerfile: ./images/operator/Dockerfile
 
-          - name: hubble-relay
+          - name: constellation-hubble-relay
             dockerfile: ./images/hubble-relay/Dockerfile
 
     steps:
