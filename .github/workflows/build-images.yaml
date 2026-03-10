@@ -14,20 +14,26 @@ permissions:
 
 jobs:
   build-and-push:
-    name: Build and Push ${{ matrix.name }}
+    name: Build and Push ${{ matrix.image_name }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: constellation-agent
+          # image_name: the ghcr.io image name
+          # dockerfile: path to the Dockerfile
+          # make_variant: value passed as OPERATOR_VARIANT build-arg (empty = not passed)
+          - image_name: constellation-agent
             dockerfile: ./images/cilium/Dockerfile
+            make_variant: ""
 
-          - name: constellation-operator
+          - image_name: constellation-operator
             dockerfile: ./images/operator/Dockerfile
+            make_variant: operator
 
-          - name: constellation-hubble-relay
+          - image_name: constellation-hubble-relay
             dockerfile: ./images/hubble-relay/Dockerfile
+            make_variant: hubble-relay
 
     steps:
       - name: Checkout
@@ -47,14 +53,14 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.name }}
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=,format=short
 
-      - name: Build and push ${{ matrix.name }}
+      - name: Build and push ${{ matrix.image_name }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -63,7 +69,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            OPERATOR_VARIANT=${{ matrix.name }}
+          build-args: ${{ matrix.make_variant != '' && format('OPERATOR_VARIANT={0}', matrix.make_variant) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
