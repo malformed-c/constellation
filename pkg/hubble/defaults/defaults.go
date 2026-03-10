@@ -31,9 +31,13 @@ const (
 	// sensitive information.
 	SensitiveValueRedacted = "HUBBLE_REDACTED"
 
+)
+
+var (
 	// SocketPath is the path to the UNIX domain socket exposing the Hubble API
 	// to clients locally.
 	SocketPath = ciliumDefaults.RuntimePath + "/hubble.sock"
+
 
 	// LostEventSendInterval is the default interval at which lost events are sent
 	// from the Observer server, if any. The default of 1s matches Hubble
