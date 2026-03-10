@@ -6,10 +6,12 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/cilium/cilium/pkg/cmdref"
+	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/hive"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -18,7 +20,28 @@ import (
 	"github.com/cilium/cilium/pkg/version"
 )
 
+// preScanInstanceID scans os.Args for --instance-id before cobra has parsed
+// any flags. This is necessary because the instance ID rewrites the default
+// values of path-related flags (state-dir, lib-dir, socket-path, …) which
+// must be set before those flags are registered in InitGlobalFlags.
+func preScanInstanceID() {
+	args := os.Args[1:]
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "--instance-id=") {
+			defaults.SetInstanceID(strings.TrimPrefix(arg, "--instance-id="))
+			return
+		}
+		if (arg == "--instance-id" || arg == "-instance-id") && i+1 < len(args) {
+			defaults.SetInstanceID(args[i+1])
+			return
+		}
+	}
+}
+
 func NewAgentCmd(hfn func() *hive.Hive) *cobra.Command {
+	// SetInstanceID must be called before InitGlobalFlags so that flag
+	// defaults for path-related flags already reflect the instance namespace.
+	preScanInstanceID()
 	h := hfn()
 
 	rootCmd := &cobra.Command{

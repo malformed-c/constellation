@@ -4,8 +4,77 @@
 package defaults
 
 import (
+	"fmt"
 	"time"
 )
+
+// Instance-scoped path roots. These start at their conventional defaults and
+// are updated by SetInstanceID to namespace a multi-instance deployment.
+var (
+	// RuntimePath is the default path to the runtime directory.
+	RuntimePath = "/var/run/cilium"
+
+	// LibraryPath is the default path to the cilium libraries directory.
+	LibraryPath = "/var/lib/cilium"
+
+	// SockPath is the path to the UNIX domain socket exposing the API to clients locally.
+	SockPath = RuntimePath + "/cilium.sock"
+
+	// ShellSockPath is the path to the UNIX domain socket exposing the debug shell
+	// to which "cilium-dbg shell" connects to.
+	ShellSockPath = RuntimePath + "/shell.sock"
+
+	// MonitorSockPath1_2 is the path to the UNIX domain socket used to
+	// distribute BPF and agent events to listeners.
+	// This is the 1.2 protocol version.
+	MonitorSockPath1_2 = RuntimePath + "/monitor1_2.sock"
+
+	// PidFilePath is the path to the pid file for the agent.
+	PidFilePath = RuntimePath + "/cilium.pid"
+
+	// DeleteQueueDir is the directory used for the CNI plugin to queue deletion requests
+	// if the agent is down.
+	DeleteQueueDir = RuntimePath + "/deleteQueue"
+
+	// DeleteQueueLockfile is the file used to synchronise access of the queue directory
+	// between the agent and the CNI plugin processes.
+	DeleteQueueLockfile = DeleteQueueDir + "/lockfile"
+
+	// BPFFSRoot is the default path where BPFFS should be mounted.
+	// When an instance-id is set this becomes a per-instance sub-mount so that
+	// BPF maps from different instances do not collide.
+	BPFFSRoot = "/sys/fs/bpf"
+
+	// CertsDirectory is the default directory used to find certificates.
+	CertsDirectory = RuntimePath + "/certs"
+)
+
+// SetInstanceID namespaces all instance-scoped path roots and interface names
+// under id so that multiple Cilium agents can coexist on the same host.
+// It must be called before any of the path variables above are consumed,
+// i.e. before flag defaults are evaluated in NewAgentCmd.
+func SetInstanceID(id string) {
+	RuntimePath = fmt.Sprintf("/var/run/cilium/%s", id)
+	LibraryPath = fmt.Sprintf("/var/lib/cilium/%s", id)
+	BPFFSRoot = fmt.Sprintf("/sys/fs/bpf/constellation/%s", id)
+
+	SockPath = RuntimePath + "/cilium.sock"
+	ShellSockPath = RuntimePath + "/shell.sock"
+	MonitorSockPath1_2 = RuntimePath + "/monitor1_2.sock"
+	PidFilePath = RuntimePath + "/cilium.pid"
+	DeleteQueueDir = RuntimePath + "/deleteQueue"
+	DeleteQueueLockfile = DeleteQueueDir + "/lockfile"
+	CertsDirectory = RuntimePath + "/certs"
+
+	// Interface names are scoped too so that the host veth pair and tunnel
+	// devices from different instances do not conflict.
+	HostDevice = "cilium_host_" + id
+	SecondHostDevice = "cilium_net_" + id
+	GeneveDevice = "cilium_geneve_" + id
+	VxlanDevice = "cilium_vxlan_" + id
+	IPIPv4Device = "cilium_ipip4_" + id
+	IPIPv6Device = "cilium_ipip6_" + id
+}
 
 // Hive options
 const (
@@ -50,9 +119,6 @@ const (
 	// IPv6NAT46x64CIDRBase is the default base for IPv6NAT46x64CIDR
 	IPv6NAT46x64CIDRBase = "64:ff9b::"
 
-	// RuntimePath is the default path to the runtime directory
-	RuntimePath = "/var/run/cilium"
-
 	// RuntimePathRights are the default access rights of the RuntimePath directory
 	RuntimePathRights = 0775
 
@@ -72,37 +138,8 @@ const (
 	// BpfDir is the default path for template files relative to LibDir
 	BpfDir = "bpf"
 
-	// LibraryPath is the default path to the cilium libraries directory
-	LibraryPath = "/var/lib/cilium"
-
-	// SockPath is the path to the UNIX domain socket exposing the API to clients locally
-	SockPath = RuntimePath + "/cilium.sock"
-
 	// SockPathEnv is the environment variable to overwrite SockPath
 	SockPathEnv = "CILIUM_SOCK"
-
-	// ShellSockPath is the path to the UNIX domain socket exposing the debug shell
-	// to which "cilium-dbg shell" connects to.
-	ShellSockPath = RuntimePath + "/shell.sock"
-
-	// MonitorSockPath1_2 is the path to the UNIX domain socket used to
-	// distribute BPF and agent events to listeners.
-	// This is the 1.2 protocol version.
-	MonitorSockPath1_2 = RuntimePath + "/monitor1_2.sock"
-
-	// PidFilePath is the path to the pid file for the agent.
-	PidFilePath = RuntimePath + "/cilium.pid"
-
-	// DeletionQueueDir is the directory used for the CNI plugin to queue deletion requests
-	// if the agent is down
-	DeleteQueueDir = RuntimePath + "/deleteQueue"
-
-	// DeleteQueueLockfile is the file used to synchronize access of the queue directory between
-	// the agent and the CNI plugin processes
-	DeleteQueueLockfile = DeleteQueueDir + "/lockfile"
-
-	// BPFFSRoot is the default path where BPFFS should be mounted
-	BPFFSRoot = "/sys/fs/bpf"
 
 	// BPFFSRootFallback is the path which is used when /sys/fs/bpf has
 	// a mount, but with the other filesystem than BPFFS.
@@ -391,10 +428,6 @@ const (
 
 	// RestoreV6Addr is used as match for cilium_host v6 (router) address
 	RestoreV6Addr = "cilium.v6.internal.raw "
-
-	// CertsDirectory is the default directory used to find certificates
-	// specified in the L7 policies.
-	CertsDirectory = RuntimePath + "/certs"
 
 	// IPAMExpiration is the timeout after which an IP subject to expiration
 	// is being released again if no endpoint is being created in time.

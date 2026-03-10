@@ -263,6 +263,11 @@ const (
 	// CgroupPathMKE points to the cgroupv1 net_cls mount instance
 	CgroupPathMKE = "mke-cgroup-mount"
 
+	// InstanceID is a unique identifier for this agent instance used to
+	// namespace runtime paths, BPF mounts and interface names so that
+	// multiple agents can coexist on the same host.
+	InstanceID = "instance-id"
+
 	// LibDir enables the directory path to store runtime build environment
 	LibDir = "lib-dir"
 
@@ -1193,6 +1198,10 @@ type DaemonConfig struct {
 
 	CreationTime       time.Time
 	BpfDir             string // BPF template files directory
+	// InstanceID is the unique identifier for this agent instance. When set,
+	// runtime paths, BPF mounts and interface names are scoped under this ID.
+	InstanceID string
+
 	LibDir             string // Cilium library files directory
 	RunDir             string // Cilium runtime directory
 	ExternalEnvoyProxy bool   // Whether Envoy is deployed as external DaemonSet or not
@@ -2461,6 +2470,7 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 	c.K8sSyncTimeout = vp.GetDuration(K8sSyncTimeoutName)
 	c.AllocatorListTimeout = vp.GetDuration(AllocatorListTimeoutName)
 	c.KeepConfig = vp.GetBool(KeepConfig)
+	c.InstanceID = vp.GetString(InstanceID)
 	c.LabelPrefixFile = vp.GetString(LabelPrefixFile)
 	c.Labels = vp.GetStringSlice(Labels)
 	c.LibDir = vp.GetString(LibDir)

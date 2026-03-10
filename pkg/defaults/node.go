@@ -16,8 +16,22 @@ const (
 	// DefaultIPv4PrefixLen is the length used to allocate container IPv4 addresses from.
 	DefaultIPv4PrefixLen = 16
 
+	// CiliumK8sAnnotationPrefix is the prefix key for the annotations used in kubernetes.
+	CiliumK8sAnnotationPrefix = "cilium.io/"
+
+	// AgentNotReadyNodeTaint is a node taint which prevents pods from being
+	// scheduled. Once cilium is setup it is removed from the node. Mostly
+	// used in cloud providers to prevent existing CNI plugins from managing
+	// pods.
+	AgentNotReadyNodeTaint = "node." + CiliumK8sAnnotationPrefix + "agent-not-ready"
+)
+
+// Device names for interfaces created by the agent. These are vars (not
+// consts) so that SetInstanceID in defaults.go can namespace them for
+// multi-instance deployments.
+var (
 	// HostDevice is the name of the device that connects the cilium IP
-	// space with the host's networking model
+	// space with the host's networking model.
 	HostDevice = "cilium_host"
 
 	// SecondHostDevice is the name of the second interface of the host veth pair.
@@ -34,15 +48,6 @@ const (
 
 	// VxlanDevice is a device of type 'vxlan', created by the agent.
 	VxlanDevice = "cilium_vxlan"
-
-	// CiliumK8sAnnotationPrefix is the prefix key for the annotations used in kubernetes.
-	CiliumK8sAnnotationPrefix = "cilium.io/"
-
-	// AgentNotReadyNodeTaint is a node taint which prevents pods from being
-	// scheduled. Once cilium is setup it is removed from the node. Mostly
-	// used in cloud providers to prevent existing CNI plugins from managing
-	// pods.
-	AgentNotReadyNodeTaint = "node." + CiliumK8sAnnotationPrefix + "agent-not-ready"
 )
 
 var (
