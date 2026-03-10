@@ -33,7 +33,7 @@ jobs:
 
           - image_name: constellation-hubble-relay
             dockerfile: ./images/hubble-relay/Dockerfile
-            make_variant: hubble-relay
+            make_variant: ""
 
     steps:
       - name: Checkout
