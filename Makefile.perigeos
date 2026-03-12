@@ -85,27 +85,29 @@ extract: $(OUT_DIR) ## Pull ghcr image and extract pre-built binaries (no Go too
 
 .PHONY: install
 install: build ## Build from source and install to system paths (requires sudo)
-	@echo "==> Installing to system"
+	@echo "==> Installing binaries"
 	sudo install -Dm755 $(AGENT_OUT) $(AGENT_DEST)
 	sudo install -Dm755 $(CRD_INSTALLER_OUT) $(CRD_INSTALLER_DEST)
 	sudo install -Dm755 $(CNI_OUT) $(CNI_DEST)
 	@echo "==> Installing BPF templates"
-	sudo $(MAKE) -C $(CURDIR) -f Makefile install-bpf
+	sudo install -m 0750 -d /var/lib/cilium/bpf
+	sudo rsync -a --delete $(CURDIR)/bpf/ /var/lib/cilium/bpf/
 	@echo "Installed:"
-	@ls -lh $(AGENT_DEST) $(CRD_INSTALLER_DEST) $(CNI_DEST)
-	@ls -d /var/lib/cilium/bpf
+	@sudo ls -lh $(AGENT_DEST) $(CRD_INSTALLER_DEST) $(CNI_DEST)
+	@sudo ls -d /var/lib/cilium/bpf
 
 .PHONY: install-extract
 install-extract: extract ## Extract from ghcr and install to system paths (requires sudo)
-	@echo "==> Installing to system"
+	@echo "==> Installing binaries"
 	sudo install -Dm755 $(AGENT_OUT) $(AGENT_DEST)
 	sudo install -Dm755 $(CRD_INSTALLER_OUT) $(CRD_INSTALLER_DEST)
 	sudo install -Dm755 $(CNI_OUT) $(CNI_DEST)
 	@echo "==> Installing BPF templates"
-	sudo $(MAKE) -C $(CURDIR) -f Makefile install-bpf
+	sudo install -m 0750 -d /var/lib/cilium/bpf
+	sudo rsync -a --delete $(CURDIR)/bpf/ /var/lib/cilium/bpf/
 	@echo "Installed:"
-	@ls -lh $(AGENT_DEST) $(CRD_INSTALLER_DEST) $(CNI_DEST)
-	@ls -d /var/lib/cilium/bpf
+	@sudo ls -lh $(AGENT_DEST) $(CRD_INSTALLER_DEST) $(CNI_DEST)
+	@sudo ls -d /var/lib/cilium/bpf
 
 .PHONY: clean
 clean: ## Remove build outputs
