@@ -6,29 +6,33 @@
 #   make -f Makefile.perigeos install  # build from source + install to system
 #   make -f Makefile.perigeos install-extract  # extract + install to system
 #
-# System install paths (override with AGENT_DEST / CNI_DEST):
-#   cilium-agent  → /usr/local/bin/cilium-agent
-#   cilium-cni    → /opt/cni/bin/cilium-cni
+# System install paths (override with AGENT_DEST / CNI_DEST / OPERATOR_DEST):
+#   cilium-agent            → /usr/local/bin/cilium-agent
+#   cilium-operator-generic → /usr/local/bin/cilium-operator
+#   cilium-cni              → /opt/cni/bin/cilium-cni
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := build
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-OUT_DIR      ?= $(CURDIR)/_output
-AGENT_OUT    := $(OUT_DIR)/cilium-agent
-CNI_OUT      := $(OUT_DIR)/cilium-cni
+OUT_DIR        ?= $(CURDIR)/_output
+AGENT_OUT      := $(OUT_DIR)/cilium-agent
+OPERATOR_OUT   := $(OUT_DIR)/cilium-operator
+CNI_OUT        := $(OUT_DIR)/cilium-cni
 
-AGENT_DEST   ?= /usr/local/bin/cilium-agent
-CNI_DEST     ?= /opt/cni/bin/cilium-cni
+AGENT_DEST     ?= /usr/local/bin/cilium-agent
+OPERATOR_DEST  ?= /usr/local/bin/cilium-operator
+CNI_DEST       ?= /opt/cni/bin/cilium-cni
 
 # ── Image reference ────────────────────────────────────────────────────────────
 # Override GHCR_TAG to pin a specific version, e.g. make extract GHCR_TAG=abc1234
 
-GHCR_REPO    ?= ghcr.io/malformed-c
-GHCR_TAG     ?= main
+GHCR_REPO      ?= ghcr.io/malformed-c
+GHCR_TAG       ?= main
 
-AGENT_IMAGE  := $(GHCR_REPO)/constellation-agent:$(GHCR_TAG)
+AGENT_IMAGE    := $(GHCR_REPO)/constellation-agent:$(GHCR_TAG)
+OPERATOR_IMAGE := $(GHCR_REPO)/constellation-operator:$(GHCR_TAG)
 
 # ── Container runtime ──────────────────────────────────────────────────────────
 # Prefer podman; fall back to docker.
@@ -53,17 +57,19 @@ $(OUT_DIR):
 	mkdir -p $(OUT_DIR)
 
 .PHONY: build
-build: $(OUT_DIR) ## Build cilium-agent and cilium-cni from source
+build: $(OUT_DIR) ## Build cilium-agent, cilium-operator and cilium-cni from source
 	@echo "==> Building cilium-agent"
 	cd daemon && $(GO_BUILD_CMD) -o $(AGENT_OUT) .
+	@echo "==> Building cilium-operator-generic"
+	cd operator && $(GO_BUILD_CMD) -tags ipam_provider_operator -o $(OPERATOR_OUT) .
 	@echo "==> Building cilium-cni"
 	cd plugins/cilium-cni && $(GO_BUILD_CMD) -o $(CNI_OUT) .
 	@echo ""
 	@echo "Built:"
-	@ls -lh $(AGENT_OUT) $(CNI_OUT)
+	@ls -lh $(AGENT_OUT) $(OPERATOR_OUT) $(CNI_OUT)
 
 .PHONY: extract
-extract: $(OUT_DIR) ## Pull ghcr image and extract pre-built binaries (no Go toolchain needed)
+extract: $(OUT_DIR) ## Pull ghcr images and extract pre-built binaries (no Go toolchain needed)
 	@echo "==> Pulling $(AGENT_IMAGE)"
 	$(CONTAINER_RT) pull $(AGENT_IMAGE)
 	@echo "==> Extracting cilium-agent"
@@ -78,31 +84,41 @@ extract: $(OUT_DIR) ## Pull ghcr image and extract pre-built binaries (no Go too
 		$(AGENT_IMAGE) \
 		-c 'cat /opt/cni/bin/cilium-cni' > $(CNI_OUT)
 	chmod +x $(CNI_OUT)
+	@echo "==> Pulling $(OPERATOR_IMAGE)"
+	$(CONTAINER_RT) pull $(OPERATOR_IMAGE)
+	@echo "==> Extracting cilium-operator"
+	$(CONTAINER_RT) run --rm \
+		--entrypoint /bin/sh \
+		$(OPERATOR_IMAGE) \
+		-c 'cat /usr/bin/cilium-operator-generic' > $(OPERATOR_OUT)
+	chmod +x $(OPERATOR_OUT)
 	@echo ""
 	@echo "Extracted:"
-	@ls -lh $(AGENT_OUT) $(CNI_OUT)
-	@file $(AGENT_OUT) $(CNI_OUT)
+	@ls -lh $(AGENT_OUT) $(OPERATOR_OUT) $(CNI_OUT)
+	@file $(AGENT_OUT) $(OPERATOR_OUT) $(CNI_OUT)
 
 .PHONY: install
 install: build ## Build from source and install to system paths (requires sudo)
 	@echo "==> Installing to system"
 	sudo install -Dm755 $(AGENT_OUT) $(AGENT_DEST)
+	sudo install -Dm755 $(OPERATOR_OUT) $(OPERATOR_DEST)
 	sudo install -Dm755 $(CNI_OUT) $(CNI_DEST)
 	@echo "==> Installing BPF templates"
 	sudo $(MAKE) -C $(CURDIR) -f Makefile install-bpf
 	@echo "Installed:"
-	@ls -lh $(AGENT_DEST) $(CNI_DEST)
+	@ls -lh $(AGENT_DEST) $(OPERATOR_DEST) $(CNI_DEST)
 	@ls -d /var/lib/cilium/bpf
 
 .PHONY: install-extract
 install-extract: extract ## Extract from ghcr and install to system paths (requires sudo)
 	@echo "==> Installing to system"
 	sudo install -Dm755 $(AGENT_OUT) $(AGENT_DEST)
+	sudo install -Dm755 $(OPERATOR_OUT) $(OPERATOR_DEST)
 	sudo install -Dm755 $(CNI_OUT) $(CNI_DEST)
 	@echo "==> Installing BPF templates"
 	sudo $(MAKE) -C $(CURDIR) -f Makefile install-bpf
 	@echo "Installed:"
-	@ls -lh $(AGENT_DEST) $(CNI_DEST)
+	@ls -lh $(AGENT_DEST) $(OPERATOR_DEST) $(CNI_DEST)
 	@ls -d /var/lib/cilium/bpf
 
 .PHONY: clean
