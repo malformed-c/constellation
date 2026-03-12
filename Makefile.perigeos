@@ -6,10 +6,125 @@
 #   make -f Makefile.perigeos install  # build from source + install to system
 #   make -f Makefile.perigeos install-extract  # extract + install to system
 #
-# System install paths (override with AGENT_DEST / CNI_DEST / OPERATOR_DEST):
-#   cilium-agent            → /usr/local/bin/cilium-agent
-#   cilium-operator-generic → /usr/local/bin/cilium-operator
-#   cilium-cni              → /opt/cni/bin/cilium-cni
+# System install paths (override with AGENT_DEST / CNI_DEST / CRD_INSTALLER_DEST):
+#   cilium-agent         → /usr/local/bin/cilium-agent
+#   cilium-crd-installer → /usr/local/bin/cilium-crd-installer
+#   cilium-cni           → /opt/cni/bin/cilium-cni
+
+SHELL := /bin/bash
+.DEFAULT_GOAL := build
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+
+OUT_DIR              ?= $(CURDIR)/_output
+AGENT_OUT            := $(OUT_DIR)/cilium-agent
+CRD_INSTALLER_OUT    := $(OUT_DIR)/cilium-crd-installer
+CNI_OUT              := $(OUT_DIR)/cilium-cni
+
+AGENT_DEST           ?= /usr/local/bin/cilium-agent
+CRD_INSTALLER_DEST   ?= /usr/local/bin/cilium-crd-installer
+CNI_DEST             ?= /opt/cni/bin/cilium-cni
+
+# ── Image reference ────────────────────────────────────────────────────────────
+# Override GHCR_TAG to pin a specific version, e.g. make extract GHCR_TAG=abc1234
+
+GHCR_REPO    ?= ghcr.io/malformed-c
+GHCR_TAG     ?= main
+
+AGENT_IMAGE  := $(GHCR_REPO)/constellation-agent:$(GHCR_TAG)
+
+# ── Container runtime ──────────────────────────────────────────────────────────
+# Prefer podman; fall back to docker.
+
+CONTAINER_RT := $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
+ifeq ($(CONTAINER_RT),)
+$(error neither podman nor docker found in PATH)
+endif
+
+# ── Go build ───────────────────────────────────────────────────────────────────
+
+GO           ?= go
+CGO_ENABLED  ?= 0
+GO_FLAGS     := -mod=vendor
+GO_LDFLAGS   := -s -w
+
+GO_BUILD_CMD := CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GO_FLAGS) -ldflags '$(GO_LDFLAGS)'
+
+# ── Targets ────────────────────────────────────────────────────────────────────
+
+$(OUT_DIR):
+	mkdir -p $(OUT_DIR)
+
+.PHONY: build
+build: $(OUT_DIR) ## Build cilium-agent, cilium-crd-installer and cilium-cni from source
+	@echo "==> Building cilium-agent"
+	cd daemon && $(GO_BUILD_CMD) -o $(AGENT_OUT) .
+	@echo "==> Building cilium-crd-installer"
+	$(GO_BUILD_CMD) -o $(CRD_INSTALLER_OUT) ./cmd/cilium-crd-installer
+	@echo "==> Building cilium-cni"
+	cd plugins/cilium-cni && $(GO_BUILD_CMD) -o $(CNI_OUT) .
+	@echo ""
+	@echo "Built:"
+	@ls -lh $(AGENT_OUT) $(CRD_INSTALLER_OUT) $(CNI_OUT)
+
+.PHONY: extract
+extract: $(OUT_DIR) ## Pull ghcr image and extract pre-built binaries (no Go toolchain needed)
+	@echo "==> Pulling $(AGENT_IMAGE)"
+	$(CONTAINER_RT) pull $(AGENT_IMAGE)
+	@echo "==> Extracting cilium-agent"
+	$(CONTAINER_RT) run --rm \
+		--entrypoint /bin/sh \
+		$(AGENT_IMAGE) \
+		-c 'cat /usr/bin/cilium-agent' > $(AGENT_OUT)
+	chmod +x $(AGENT_OUT)
+	@echo "==> Extracting cilium-crd-installer"
+	$(CONTAINER_RT) run --rm \
+		--entrypoint /bin/sh \
+		$(AGENT_IMAGE) \
+		-c 'cat /usr/bin/cilium-crd-installer' > $(CRD_INSTALLER_OUT)
+	chmod +x $(CRD_INSTALLER_OUT)
+	@echo "==> Extracting cilium-cni"
+	$(CONTAINER_RT) run --rm \
+		--entrypoint /bin/sh \
+		$(AGENT_IMAGE) \
+		-c 'cat /opt/cni/bin/cilium-cni' > $(CNI_OUT)
+	chmod +x $(CNI_OUT)
+	@echo ""
+	@echo "Extracted:"
+	@ls -lh $(AGENT_OUT) $(CRD_INSTALLER_OUT) $(CNI_OUT)
+	@file $(AGENT_OUT) $(CRD_INSTALLER_OUT) $(CNI_OUT)
+
+.PHONY: install
+install: build ## Build from source and install to system paths (requires sudo)
+	@echo "==> Installing to system"
+	sudo install -Dm755 $(AGENT_OUT) $(AGENT_DEST)
+	sudo install -Dm755 $(CRD_INSTALLER_OUT) $(CRD_INSTALLER_DEST)
+	sudo install -Dm755 $(CNI_OUT) $(CNI_DEST)
+	@echo "==> Installing BPF templates"
+	sudo $(MAKE) -C $(CURDIR) -f Makefile install-bpf
+	@echo "Installed:"
+	@ls -lh $(AGENT_DEST) $(CRD_INSTALLER_DEST) $(CNI_DEST)
+	@ls -d /var/lib/cilium/bpf
+
+.PHONY: install-extract
+install-extract: extract ## Extract from ghcr and install to system paths (requires sudo)
+	@echo "==> Installing to system"
+	sudo install -Dm755 $(AGENT_OUT) $(AGENT_DEST)
+	sudo install -Dm755 $(CRD_INSTALLER_OUT) $(CRD_INSTALLER_DEST)
+	sudo install -Dm755 $(CNI_OUT) $(CNI_DEST)
+	@echo "==> Installing BPF templates"
+	sudo $(MAKE) -C $(CURDIR) -f Makefile install-bpf
+	@echo "Installed:"
+	@ls -lh $(AGENT_DEST) $(CRD_INSTALLER_DEST) $(CNI_DEST)
+	@ls -d /var/lib/cilium/bpf
+
+.PHONY: clean
+clean: ## Remove build outputs
+	rm -rf $(OUT_DIR)
+
+.PHONY: help
+help: ## Show this help
+	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := build
