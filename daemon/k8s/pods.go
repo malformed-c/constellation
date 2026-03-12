@@ -86,9 +86,15 @@ var (
 )
 
 // NewPodTableAndReflector returns the read-only Table[LocalPod] and registers
-// the k8s reflector. These are combined to ensure any dependency on Table[LocalPod]
-// will start after the reflector, ensuring that Start hooks can wait for the table
-// to initialize.
+// k8s reflectors for all managed node names. These are combined to ensure any
+// dependency on Table[LocalPod] will start after all reflectors, ensuring that
+// Start hooks can wait for the table to initialize.
+//
+// In standard Cilium deployments there is one managed node (the local host)
+// and therefore one reflector, matching upstream behaviour exactly.
+// In Constellation/perigeos host-sharding mode there are N managed nodes
+// (one per pawn); each gets its own field-selector watch, all writing into
+// the same table.
 func NewPodTableAndReflector(jg job.Group, db *statedb.DB, cs client.Clientset) (statedb.Table[LocalPod], error) {
 	pods, err := NewPodTable(db)
 	if err != nil {
@@ -99,9 +105,13 @@ func NewPodTableAndReflector(jg job.Group, db *statedb.DB, cs client.Clientset) 
 		return pods, nil
 	}
 
-	cfg := podReflectorConfig(cs, pods)
-	err = k8s.RegisterReflector(jg, db, cfg)
-	return pods, err
+	for _, nodeName := range nodeTypes.GetManagedNames() {
+		cfg := podReflectorConfig(cs, pods, nodeName)
+		if err := k8s.RegisterReflector(jg, db, cfg); err != nil {
+			return nil, fmt.Errorf("registering pod reflector for node %q: %w", nodeName, err)
+		}
+	}
+	return pods, nil
 }
 
 func PodByName(namespace, name string) statedb.Query[LocalPod] {
@@ -116,14 +126,25 @@ func NewPodTable(db *statedb.DB) (statedb.RWTable[LocalPod], error) {
 	)
 }
 
-func podReflectorConfig(cs client.Clientset, pods statedb.RWTable[LocalPod]) k8s.ReflectorConfig[LocalPod] {
+// podReflectorConfig builds a ReflectorConfig that watches pods on nodeName
+// and writes them into the shared pods table. Each call produces a reflector
+// with a unique Name so the statedb initializer tracking works correctly when
+// multiple reflectors share the same table.
+func podReflectorConfig(cs client.Clientset, pods statedb.RWTable[LocalPod], nodeName string) k8s.ReflectorConfig[LocalPod] {
 	lw := utils.ListerWatcherWithModifiers(
 		utils.ListerWatcherFromTyped(cs.Slim().CoreV1().Pods("")),
 		func(opts *metav1.ListOptions) {
-			opts.FieldSelector = fields.ParseSelectorOrDie("spec.nodeName=" + nodeTypes.GetName()).String()
+			opts.FieldSelector = fields.ParseSelectorOrDie("spec.nodeName=" + nodeName).String()
 		})
+	name := reflectorName
+	if nodeName != nodeTypes.GetName() {
+		// Append the node name so each reflector has a unique name in the
+		// statedb initializer registry. The primary node keeps the canonical
+		// name for compatibility with any code that waits on it by name.
+		name = reflectorName + "/" + nodeName
+	}
 	return k8s.ReflectorConfig[LocalPod]{
-		Name:          reflectorName,
+		Name:          name,
 		Table:         pods,
 		ListerWatcher: lw,
 		MetricScope:   "Pod",

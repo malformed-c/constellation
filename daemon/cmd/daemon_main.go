@@ -60,6 +60,7 @@ import (
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/nodediscovery"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/pidfile"
 	"github.com/cilium/cilium/pkg/policy"
@@ -96,6 +97,9 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	// when cobra registers them.
 	flags.String(option.InstanceID, "", "Unique identifier for this agent instance; namespaces runtime paths, BPF mounts and interface names so multiple agents can coexist on the same host (e.g. --instance-id=worker0)")
 	option.BindEnv(vp, option.InstanceID)
+
+	flags.String(option.ManagedNodes, "", "Comma-separated list of k8s node names whose pods this agent manages. Defaults to the local hostname. Set to pawn names in Constellation/perigeos host-sharding deployments (e.g. --managed-nodes=pawn-0,pawn-1,pawn-2)")
+	option.BindEnv(vp, option.ManagedNodes)
 
 	// Validators
 	option.Config.FixedIdentityMappingValidator = option.Validator(func(val string) error {
@@ -1037,6 +1041,14 @@ func initEnv(logger *slog.Logger, vp *viper.Viper) {
 	if option.Config.InstanceID != "" {
 		bpf.SetBPFFSRoot(defaults.BPFFSRoot)
 	}
+
+	// Wire managed node names into nodeTypes so the pod watcher and endpoint
+	// restore logic know which node names to accept. Must happen after
+	// option.Config is populated and before the k8s reflectors start.
+	if len(option.Config.ManagedNodeNames) > 0 {
+		nodeTypes.SetManagedNames(option.Config.ManagedNodeNames)
+	}
+
 	bpf.CheckOrMountFS(logger, option.Config.BPFRoot)
 	cgroups.CheckOrMountCgrpFS(logger, option.Config.CGroupRoot)
 

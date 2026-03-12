@@ -18,7 +18,44 @@ var (
 	nodeName             = "localhost"
 	absoluteNodeName     = nodeName
 	absoluteNodeNameOnce sync.Once
+
+	// managedNodeNames is the set of k8s node names whose pods this agent
+	// manages. In standard Cilium deployments this contains only nodeName.
+	// In Constellation (perigeos host sharding) it contains all pawn names
+	// running on this physical host, set via --managed-nodes.
+	managedNodeNames     []string
+	managedNodeNamesMu   sync.RWMutex
 )
+
+// SetManagedNames sets the list of k8s node names whose pods this agent
+// manages. Must be called during bootstrap before the pod watcher starts.
+// If names is empty, defaults to [GetName()].
+func SetManagedNames(names []string) {
+	managedNodeNamesMu.Lock()
+	defer managedNodeNamesMu.Unlock()
+	managedNodeNames = names
+}
+
+// GetManagedNames returns the list of k8s node names this agent manages.
+// Always returns at least one entry (the local node name).
+func GetManagedNames() []string {
+	managedNodeNamesMu.RLock()
+	defer managedNodeNamesMu.RUnlock()
+	if len(managedNodeNames) == 0 {
+		return []string{nodeName}
+	}
+	return managedNodeNames
+}
+
+// IsManaged returns true if the given node name is managed by this agent.
+func IsManaged(name string) bool {
+	for _, n := range GetManagedNames() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
 
 // SetName sets the name of the local node. This will overwrite the value that
 // is automatically retrieved with `os.Hostname()`.

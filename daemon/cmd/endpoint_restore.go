@@ -357,9 +357,11 @@ func (r *endpointRestorer) getPodForEndpoint(ep *endpoint.Endpoint) error {
 	pod, err = r.k8sWatcher.GetCachedPod(ep.K8sNamespace, ep.K8sPodName)
 	if err != nil && k8serrors.IsNotFound(err) {
 		return fmt.Errorf("Kubernetes pod %s/%s does not exist", ep.K8sNamespace, ep.K8sPodName)
-	} else if err == nil && pod.Spec.NodeName != nodeTypes.GetName() {
+	} else if err == nil && !nodeTypes.IsManaged(pod.Spec.NodeName) {
 		// if flag CiliumEndpointCRD is disabled,
 		// `GetCachedPod` may return endpoint has moved to another node.
+		// IsManaged checks against all managed node names (see --managed-nodes)
+		// so this works for both standard and host-sharded Constellation deployments.
 		return fmt.Errorf("Kubernetes pod %s/%s is not owned by this agent", ep.K8sNamespace, ep.K8sPodName)
 	}
 	return nil
