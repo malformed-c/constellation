@@ -88,16 +88,22 @@ install: build ## Build from source and install to system paths (requires sudo)
 	@echo "==> Installing to system"
 	sudo install -Dm755 $(AGENT_OUT) $(AGENT_DEST)
 	sudo install -Dm755 $(CNI_OUT) $(CNI_DEST)
+	@echo "==> Installing BPF templates"
+	sudo $(MAKE) -C $(CURDIR) -f Makefile install-bpf
 	@echo "Installed:"
 	@ls -lh $(AGENT_DEST) $(CNI_DEST)
+	@ls -d /var/lib/cilium/bpf
 
 .PHONY: install-extract
 install-extract: extract ## Extract from ghcr and install to system paths (requires sudo)
 	@echo "==> Installing to system"
 	sudo install -Dm755 $(AGENT_OUT) $(AGENT_DEST)
 	sudo install -Dm755 $(CNI_OUT) $(CNI_DEST)
+	@echo "==> Installing BPF templates"
+	sudo $(MAKE) -C $(CURDIR) -f Makefile install-bpf
 	@echo "Installed:"
 	@ls -lh $(AGENT_DEST) $(CNI_DEST)
+	@ls -d /var/lib/cilium/bpf
 
 .PHONY: clean
 clean: ## Remove build outputs
