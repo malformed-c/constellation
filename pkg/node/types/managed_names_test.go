@@ -9,19 +9,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// resetManagedNames clears the managed names state between tests.
-// Tests that call SetManagedNames must defer this to avoid polluting siblings.
-func resetManagedNames() {
-	managedNodeNamesMu.Lock()
-	managedNodeNames = nil
-	managedNodeNamesMu.Unlock()
+// resetManagedNames returns a cleanup function that restores both the managed
+// names list and the node name to their values at call time. Every test must
+// defer the returned function.
+func resetManagedNames() func() {
+	savedName := nodeName
+	return func() {
+		managedNodeNamesMu.Lock()
+		managedNodeNames = nil
+		managedNodeNamesMu.Unlock()
+		nodeName = savedName
+	}
 }
 
 // TestGetManagedNames_DefaultsToNodeName verifies that when no managed names
 // are set the function falls back to the single local node name — preserving
 // standard Cilium behaviour.
 func TestGetManagedNames_DefaultsToNodeName(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	SetName("host-01")
 	names := GetManagedNames()
@@ -32,7 +37,7 @@ func TestGetManagedNames_DefaultsToNodeName(t *testing.T) {
 // TestSetManagedNames_ReturnsConfiguredList verifies that after SetManagedNames
 // the list is returned verbatim.
 func TestSetManagedNames_ReturnsConfiguredList(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	pawns := []string{"pawn-0", "pawn-1", "pawn-2"}
 	SetManagedNames(pawns)
@@ -42,7 +47,7 @@ func TestSetManagedNames_ReturnsConfiguredList(t *testing.T) {
 // TestSetManagedNames_EmptySlice_FallsBackToNodeName verifies that setting an
 // empty list restores the default fallback behaviour.
 func TestSetManagedNames_EmptySlice_FallsBackToNodeName(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	SetName("host-02")
 	SetManagedNames([]string{"pawn-0"})
@@ -53,7 +58,7 @@ func TestSetManagedNames_EmptySlice_FallsBackToNodeName(t *testing.T) {
 // TestIsManaged_LocalNodeAlwaysManaged verifies that the physical host name is
 // always managed regardless of what SetManagedNames was called with.
 func TestIsManaged_LocalNodeAlwaysManaged(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	SetName("host-03")
 	// No SetManagedNames — default fallback applies.
@@ -63,7 +68,7 @@ func TestIsManaged_LocalNodeAlwaysManaged(t *testing.T) {
 // TestIsManaged_PawnNames verifies that pawn names passed to SetManagedNames
 // are all reported as managed.
 func TestIsManaged_PawnNames(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	SetManagedNames([]string{"pawn-0", "pawn-1", "pawn-2"})
 
@@ -75,7 +80,7 @@ func TestIsManaged_PawnNames(t *testing.T) {
 // TestIsManaged_UnknownName verifies that names not in the managed set return
 // false — preventing endpoint restore from accepting foreign pods.
 func TestIsManaged_UnknownName(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	SetManagedNames([]string{"pawn-0", "pawn-1"})
 
@@ -90,7 +95,7 @@ func TestIsManaged_UnknownName(t *testing.T) {
 // TestIsManaged_CaseSensitive verifies that name matching is exact and
 // case-sensitive, consistent with k8s node name semantics.
 func TestIsManaged_CaseSensitive(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	SetManagedNames([]string{"Pawn-0"})
 	require.False(t, IsManaged("pawn-0"),
@@ -100,7 +105,7 @@ func TestIsManaged_CaseSensitive(t *testing.T) {
 // TestGetManagedNames_DoesNotReturnInternalSlice verifies that mutating the
 // returned slice does not corrupt internal state.
 func TestGetManagedNames_DoesNotReturnInternalSlice(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	SetManagedNames([]string{"pawn-0", "pawn-1"})
 	names := GetManagedNames()
@@ -114,7 +119,7 @@ func TestGetManagedNames_DoesNotReturnInternalSlice(t *testing.T) {
 // TestManagedNames_PawnTopology is the canonical perigeos scenario:
 // one physical host running two pawns, one constellation-agent managing both.
 func TestManagedNames_PawnTopology(t *testing.T) {
-	defer resetManagedNames()
+	defer resetManagedNames()()
 
 	// Physical host name — this is what constellation-agent registers as.
 	SetName("rack-07")

@@ -5,6 +5,7 @@ package k8s
 
 import (
 	"fmt"
+	"iter"
 	"strconv"
 	"strings"
 
@@ -148,6 +149,22 @@ func podReflectorConfig(cs client.Clientset, pods statedb.RWTable[LocalPod], nod
 		Table:         pods,
 		ListerWatcher: lw,
 		MetricScope:   "Pod",
+		// QueryAll must be scoped to this reflector's node so that a Replace
+		// (initial list or resync) from one reflector does not delete entries
+		// written by another reflector sharing the same table.
+		// Without this, the default queryAll = tbl.All() causes reflector N's
+		// Replace to wipe out everything reflectors 1..N-1 just wrote.
+		QueryAll: func(txn statedb.ReadTxn, tbl statedb.Table[LocalPod]) iter.Seq2[LocalPod, statedb.Revision] {
+			return func(yield func(LocalPod, statedb.Revision) bool) {
+				for pod, rev := range tbl.All(txn) {
+					if pod.Spec.NodeName == nodeName {
+						if !yield(pod, rev) {
+							return
+						}
+					}
+				}
+			}
+		},
 		Transform: func(_ statedb.ReadTxn, obj any) (LocalPod, bool) {
 			pod, ok := obj.(*slim_corev1.Pod)
 			if !ok {

@@ -36,15 +36,16 @@ func SetManagedNames(names []string) {
 	managedNodeNames = names
 }
 
-// GetManagedNames returns the list of k8s node names this agent manages.
-// Always returns at least one entry (the local node name).
+// GetManagedNames returns a copy of the list of k8s node names this agent
+// manages. Always returns at least one entry (the local node name).
+// Returns a copy so callers cannot accidentally modify internal state.
 func GetManagedNames() []string {
 	managedNodeNamesMu.RLock()
 	defer managedNodeNamesMu.RUnlock()
 	if len(managedNodeNames) == 0 {
 		return []string{nodeName}
 	}
-	return managedNodeNames
+	return append([]string(nil), managedNodeNames...)
 }
 
 // IsManaged returns true if the given node name is managed by this agent.
