@@ -14,6 +14,7 @@ import (
 
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/controller"
+	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/option"
 	cnitypes "github.com/cilium/cilium/plugins/cilium-cni/types"
 )
@@ -59,7 +60,7 @@ var defaultConfig = Config{
 	WriteCNIConfWhenReady: "",
 	ReadCNIConf:           "",
 	CNIChainingMode:       "none",
-	CNILogFile:            "/var/run/cilium/cilium-cni.log",
+	CNILogFile:            defaults.RuntimePath + "/cilium-cni.log",
 	CNIExclusive:          false,
 	CNIChainingTarget:     "",
 	CNIExternalRouting:    false,

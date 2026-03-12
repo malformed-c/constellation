@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/endpoint"
 	"github.com/cilium/cilium/pkg/endpointmanager"
 	"github.com/cilium/cilium/pkg/lock"
@@ -27,10 +28,9 @@ import (
 	"github.com/cilium/cilium/pkg/ztunnel/pb"
 )
 
-const (
-	// defaultZDSUnixAddress is the default Unix socket address for the ZDS server.
-	defaultZDSUnixAddress = "/var/run/cilium/ztunnel.sock"
-)
+// defaultZDSUnixAddress is the default Unix socket address for the ZDS server.
+// Defined as a var (not const) so it reflects defaults.RuntimePath after SetInstanceID.
+var defaultZDSUnixAddress = defaults.RuntimePath + "/ztunnel.sock"
 
 type ztunnelConn struct {
 	conn *net.UnixConn

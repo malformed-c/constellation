@@ -13,6 +13,7 @@ import (
 	"github.com/cilium/hive/cell"
 	"github.com/spf13/pflag"
 
+	"github.com/cilium/cilium/pkg/defaults"
 	k8sClient "github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/policy/api"
@@ -39,7 +40,7 @@ type SecretManager interface {
 }
 
 var defaultManagerConfig = managerConfig{
-	CertificatesDirectory: "/var/run/cilium/certs",
+	CertificatesDirectory: defaults.CertsDirectory,
 }
 
 type managerConfig struct {
