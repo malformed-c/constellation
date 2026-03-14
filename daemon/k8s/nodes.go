@@ -24,6 +24,7 @@ import (
 	"github.com/cilium/hive/job"
 	"github.com/cilium/statedb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/watch"
 
 	"github.com/cilium/cilium/pkg/k8s"
@@ -69,9 +70,10 @@ func discoverManagedNodes(ctx context.Context, cs client.Clientset, selector str
 // nodeWatcher watches Node objects matching a label selector and
 // dynamically updates the managed names set and pod reflectors.
 type nodeWatcher struct {
-	logger   *slog.Logger
-	cs       client.Clientset
-	selector string
+	logger         *slog.Logger
+	cs             client.Clientset
+	selector       string
+	parsedSelector labels.Selector
 
 	// For registering new pod reflectors when nodes are added.
 	jg   job.Group
@@ -99,34 +101,38 @@ func startNodeWatcher(
 		known[n] = struct{}{}
 	}
 
+	parsed, err := labels.Parse(selector)
+	if err != nil {
+		// Selector was already validated by discoverManagedNodes List call.
+		parsed = labels.Nothing()
+	}
+
 	nw := &nodeWatcher{
-		logger:   nodeWatcherLog,
-		cs:       cs,
-		selector: selector,
-		jg:       jg,
-		db:       db,
-		pods:     pods,
-		known:    known,
+		logger:         nodeWatcherLog,
+		cs:             cs,
+		selector:       selector,
+		parsedSelector: parsed,
+		jg:             jg,
+		db:             db,
+		pods:           pods,
+		known:          known,
 	}
 
 	jg.Add(job.OneShot("managed-node-watcher", nw.run))
 }
 
 func (nw *nodeWatcher) run(ctx context.Context, health cell.Health) error {
-	for {
+	for ctx.Err() == nil {
 		if err := nw.watch(ctx); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
 			nw.logger.Warn("Node watch error, retrying",
 				logfields.Error, err)
 			select {
 			case <-ctx.Done():
-				return nil
 			case <-time.After(5 * time.Second):
 			}
 		}
 	}
+	return nil
 }
 
 func (nw *nodeWatcher) watch(ctx context.Context) error {
@@ -160,13 +166,20 @@ func (nw *nodeWatcher) handleEvent(evt watch.Event) {
 	}
 }
 
-type namedObject interface {
+type labeledObject interface {
 	GetName() string
+	GetLabels() map[string]string
 }
 
 func (nw *nodeWatcher) handleAdded(evt watch.Event) {
-	obj, ok := evt.Object.(namedObject)
+	obj, ok := evt.Object.(labeledObject)
 	if !ok {
+		return
+	}
+	// Validate that the node actually matches our selector. The API server
+	// filters watch events by label selector, but this guards against
+	// edge cases and test fakes that may not filter.
+	if !nw.parsedSelector.Matches(labels.Set(obj.GetLabels())) {
 		return
 	}
 	name := obj.GetName()
@@ -196,7 +209,7 @@ func (nw *nodeWatcher) handleAdded(evt watch.Event) {
 }
 
 func (nw *nodeWatcher) handleDeleted(evt watch.Event) {
-	obj, ok := evt.Object.(namedObject)
+	obj, ok := evt.Object.(labeledObject)
 	if !ok {
 		return
 	}
