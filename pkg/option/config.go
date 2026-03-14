@@ -268,10 +268,12 @@ const (
 	// multiple agents can coexist on the same host.
 	InstanceID = "instance-id"
 
-	// ManagedNodes is the comma-separated list of k8s node names whose pods
-	// this agent manages. Defaults to the local hostname. Set to pawn names
-	// when running in Constellation/perigeos host-sharding mode.
-	ManagedNodes = "managed-nodes"
+	// ManagedNodeSelector is a Kubernetes label selector for discovering
+	// which Node objects this agent manages. The agent watches matching
+	// nodes and creates per-node pod reflectors dynamically.
+	// If the value contains no "=" (bare label key), the agent appends
+	// "=<os.Hostname()>" automatically. Empty = standard single-node mode.
+	ManagedNodeSelector = "managed-node-selector"
 
 	// LibDir enables the directory path to store runtime build environment
 	LibDir = "lib-dir"
@@ -1207,10 +1209,10 @@ type DaemonConfig struct {
 	// runtime paths, BPF mounts and interface names are scoped under this ID.
 	InstanceID string
 
-	// ManagedNodeNames is the list of k8s node names whose pods this agent
-	// manages. Populated from --managed-nodes at startup. Always contains at
-	// least one entry (the local node name).
-	ManagedNodeNames []string
+	// ManagedNodeSelector is the label selector string for discovering
+	// managed nodes dynamically. Populated from --managed-node-selector.
+	// Empty means single-node mode (standard Cilium behaviour).
+	ManagedNodeSelector string
 
 	LibDir             string // Cilium library files directory
 	RunDir             string // Cilium runtime directory
@@ -2481,14 +2483,15 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 	c.AllocatorListTimeout = vp.GetDuration(AllocatorListTimeoutName)
 	c.KeepConfig = vp.GetBool(KeepConfig)
 	c.InstanceID = vp.GetString(InstanceID)
-	if raw := vp.GetString(ManagedNodes); raw != "" {
-		var names []string
-		for _, n := range strings.Split(raw, ",") {
-			if n = strings.TrimSpace(n); n != "" {
-				names = append(names, n)
+	if sel := vp.GetString(ManagedNodeSelector); sel != "" {
+		// Bare label key (no "=") → append "=<hostname>" so the selector
+		// resolves to the current physical host automatically.
+		if !strings.Contains(sel, "=") {
+			if h, err := os.Hostname(); err == nil {
+				sel = sel + "=" + h
 			}
 		}
-		c.ManagedNodeNames = names
+		c.ManagedNodeSelector = sel
 	}
 	c.LabelPrefixFile = vp.GetString(LabelPrefixFile)
 	c.Labels = vp.GetStringSlice(Labels)

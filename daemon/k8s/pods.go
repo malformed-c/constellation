@@ -4,6 +4,7 @@
 package k8s
 
 import (
+	"context"
 	"fmt"
 	"iter"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	"github.com/cilium/cilium/pkg/k8s/utils"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
+	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/time"
 )
 
@@ -106,6 +108,36 @@ func NewPodTableAndReflector(jg job.Group, db *statedb.DB, cs client.Clientset) 
 		return pods, nil
 	}
 
+	selector := option.Config.ManagedNodeSelector
+	if selector != "" {
+		// Label-selector mode: discover nodes matching the selector,
+		// create a pod reflector per node, and start a background
+		// watcher for dynamic node addition/removal.
+		ctx := context.TODO()
+		names, err := discoverManagedNodes(ctx, cs, selector)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(names) == 0 {
+			// No matching nodes yet — fall back to local node so the
+			// agent can still manage its own host pods.
+			names = []string{nodeTypes.GetName()}
+			nodeTypes.SetManagedNames(names)
+		}
+
+		for _, name := range names {
+			cfg := podReflectorConfig(cs, pods, name)
+			if err := k8s.RegisterReflector(jg, db, cfg); err != nil {
+				return nil, fmt.Errorf("registering pod reflector for node %q: %w", name, err)
+			}
+		}
+
+		startNodeWatcher(jg, db, cs, pods, selector, names)
+		return pods, nil
+	}
+
+	// Standard single-node mode — one reflector for the local node.
 	for _, nodeName := range nodeTypes.GetManagedNames() {
 		cfg := podReflectorConfig(cs, pods, nodeName)
 		if err := k8s.RegisterReflector(jg, db, cfg); err != nil {

@@ -60,7 +60,6 @@ import (
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/nodediscovery"
-	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/pidfile"
 	"github.com/cilium/cilium/pkg/policy"
@@ -98,8 +97,8 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags.String(option.InstanceID, "", "Unique identifier for this agent instance; namespaces runtime paths, BPF mounts and interface names so multiple agents can coexist on the same host (e.g. --instance-id=worker0)")
 	option.BindEnv(vp, option.InstanceID)
 
-	flags.String(option.ManagedNodes, "", "Comma-separated list of k8s node names whose pods this agent manages. Defaults to the local hostname. Set to pawn names in Constellation/perigeos host-sharding deployments (e.g. --managed-nodes=pawn-0,pawn-1,pawn-2)")
-	option.BindEnv(vp, option.ManagedNodes)
+	flags.String(option.ManagedNodeSelector, "", "Kubernetes label selector for nodes this agent manages. When set, the agent watches matching Node objects and manages their pods dynamically. Pass a bare label key (e.g. perigeos.io/host) to auto-append =<hostname>. Empty = standard single-node mode.")
+	option.BindEnv(vp, option.ManagedNodeSelector)
 
 	// Validators
 	option.Config.FixedIdentityMappingValidator = option.Validator(func(val string) error {
@@ -1042,12 +1041,9 @@ func initEnv(logger *slog.Logger, vp *viper.Viper) {
 		bpf.SetBPFFSRoot(defaults.BPFFSRoot)
 	}
 
-	// Wire managed node names into nodeTypes so the pod watcher and endpoint
-	// restore logic know which node names to accept. Must happen after
-	// option.Config is populated and before the k8s reflectors start.
-	if len(option.Config.ManagedNodeNames) > 0 {
-		nodeTypes.SetManagedNames(option.Config.ManagedNodeNames)
-	}
+	// Managed node names are now discovered dynamically by the node watcher
+	// inside NewPodTableAndReflector when --managed-node-selector is set.
+	// No static SetManagedNames call needed here.
 
 	bpf.CheckOrMountFS(logger, option.Config.BPFRoot)
 	cgroups.CheckOrMountCgrpFS(logger, option.Config.CGroupRoot)

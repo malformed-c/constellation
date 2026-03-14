@@ -21,15 +21,16 @@ var (
 
 	// managedNodeNames is the set of k8s node names whose pods this agent
 	// manages. In standard Cilium deployments this contains only nodeName.
-	// In Constellation (perigeos host sharding) it contains all pawn names
-	// running on this physical host, set via --managed-nodes.
+	// In Constellation (perigeos host sharding) it is populated dynamically
+	// by the node watcher from --managed-node-selector.
 	managedNodeNames     []string
 	managedNodeNamesMu   sync.RWMutex
 )
 
 // SetManagedNames sets the list of k8s node names whose pods this agent
-// manages. Must be called during bootstrap before the pod watcher starts.
-// If names is empty, defaults to [GetName()].
+// manages. Called by the node watcher during bootstrap (initial list)
+// and updated dynamically as nodes are added or removed.
+// If names is empty, GetManagedNames defaults to [GetName()].
 func SetManagedNames(names []string) {
 	managedNodeNamesMu.Lock()
 	defer managedNodeNamesMu.Unlock()
