@@ -4,18 +4,29 @@ This repo is Constellation, a minimal fork of Cilium. Read this before making ch
 
 ## What this repo is
 
-Constellation adds `--instance-id` to Cilium so multiple agents can coexist on one host. The diff versus upstream is intentionally tiny. Every change should be evaluated against the question: *does this need to be a fork change, or can it go upstream?*
+Constellation is a Cilium fork that adds multi-node management for the perigeos host-sharding topology. One agent per physical host manages pods across all virtual nodes (pawns + supervisor) using `--managed-node-selector` for dynamic label-based discovery.
+
+The diff versus upstream is intentionally tiny. Every change should be evaluated against the question: *does this need to be a fork change, or can it go upstream?*
 
 ## Repository structure
 
 Standard Cilium layout. The constellation-specific changes live in:
 
+### Instance scoping (ADR-001, Option A — preserved but not active)
+
 - `pkg/defaults/defaults.go` — instance-scoped runtime/library/BPF paths
 - `pkg/defaults/node.go` — instance-scoped interface names
 - `pkg/bpf/bpffs_linux.go` — exported `SetBPFFSRoot`
 - `daemon/cmd/root.go` — `preScanInstanceID()` pre-parses `--instance-id` before cobra
-- `daemon/cmd/daemon_main.go` — flag registration
-- `pkg/option/config.go` — `InstanceID` field on `DaemonConfig`
+
+### Multi-node management (ADR-001, Option B — active)
+
+- `daemon/cmd/daemon_main.go` — `--managed-node-selector` flag registration
+- `pkg/option/config.go` — `ManagedNodeSelector` field, bare-key auto-expansion
+- `daemon/k8s/pods.go` — `NewPodTableAndReflector` creates per-node reflectors; integrates node watcher
+- `daemon/k8s/nodes.go` — node watcher: `discoverManagedNodes` (List) + `startNodeWatcher` (Watch) for dynamic add/remove
+- `pkg/node/types/nodename.go` — `SetManagedNames`/`GetManagedNames`/`IsManaged` API
+- `daemon/cmd/endpoint_restore.go` — relaxed node name check for managed names
 
 ## Ground rules
 
@@ -27,13 +38,24 @@ Standard Cilium layout. The constellation-specific changes live in:
 
 **Interface names are vars, not constants.** `defaults.HostDevice`, `defaults.SecondHostDevice`, etc. are now `var`. Treat them as runtime values.
 
+## Node discovery and management
+
+The agent discovers which nodes to manage via `--managed-node-selector=perigeos.io/host`. This bare key is auto-expanded to `perigeos.io/host=<os.Hostname()>` in `config.go` Populate. The flow:
+
+1. **Startup** (hive Provide): `discoverManagedNodes` Lists nodes matching the label selector, calls `SetManagedNames`, creates per-node pod reflectors
+2. **Runtime** (hive Start): `startNodeWatcher` background job Watches for node add/remove events, dynamically registers new reflectors
+3. **Fallback**: if no selector or no matching nodes, behaves like stock Cilium (single local node)
+
+Tests in `daemon/k8s/managed_nodes_test.go` cover both the static `SetManagedNames` path and the selector-based discovery path.
+
 ## Making changes
 
 Before touching anything, understand whether the change is:
 
-1. **Instance-scoping** — a Cilium singleton that needs to become instance-aware. Follow the existing pattern in `pkg/defaults/`.
-2. **Constellation-specific feature** — something Perigeos needs that Cilium will never want. Keep it isolated.
-3. **Upstream fix** — should be contributed to Cilium directly, then rebased in.
+1. **Multi-node management** — extending how the agent discovers or manages nodes across pawns. Keep changes in `daemon/k8s/` and `pkg/node/types/`.
+2. **Instance-scoping** — a Cilium singleton that needs to become instance-aware. Follow the existing pattern in `pkg/defaults/`.
+3. **Constellation-specific feature** — something Perigeos needs that Cilium will never want. Keep it isolated.
+4. **Upstream fix** — should be contributed to Cilium directly, then rebased in.
 
 ## CI
 
