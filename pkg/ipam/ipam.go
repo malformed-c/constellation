@@ -4,6 +4,7 @@
 package ipam
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/node"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
 )
 
@@ -130,12 +132,29 @@ func (ipam *IPAM) ConfigureAllocator() {
 			logfields.V6Prefix, ipam.nodeAddressing.IPv6().AllocationCIDR(),
 		)
 
+		// When managing multiple nodes (perigeos host sharding), merge all
+		// managed CiliumNode CIDRs into a single allocator so the agent
+		// can serve IPs for all pawns from one pool.
+		managedNames := nodeTypes.GetManagedNames()
+		useManaged := len(managedNames) > 1 && ipam.config.IPAMMode() == ipamOption.IPAMClusterPool
+
 		if ipam.config.IPv6Enabled() {
 			ipam.ipv6Allocator = newHostScopeAllocator(ipam.nodeAddressing.IPv6().AllocationCIDR().IPNet)
 		}
 
 		if ipam.config.IPv4Enabled() {
-			ipam.ipv4Allocator = newHostScopeAllocator(ipam.nodeAddressing.IPv4().AllocationCIDR().IPNet)
+			if useManaged {
+				ipam.logger.Info("Managed IPAM: using per-pawn CiliumNode CIDRs",
+					"managedNodes", len(managedNames))
+				ipam.ipv4Allocator = newManagedScopeAllocator(
+					context.TODO(),
+					ipam.logger,
+					ipam.clientset,
+					ipam.nodeAddressing.IPv4().AllocationCIDR().IPNet,
+				)
+			} else {
+				ipam.ipv4Allocator = newHostScopeAllocator(ipam.nodeAddressing.IPv4().AllocationCIDR().IPNet)
+			}
 		}
 	case ipamOption.IPAMMultiPool:
 		ipam.logger.Info("Initializing MultiPool IPAM")
