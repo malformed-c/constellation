@@ -51,7 +51,7 @@ linters:
     goheader:
       values:
         regexp:
-          PROJECT: Cilium|Hubble
+          PROJECT: Cilium|Hubble|Constellation
       template: |-
         SPDX-License-Identifier: Apache-2.0
         Copyright Authors of {{ PROJECT }}

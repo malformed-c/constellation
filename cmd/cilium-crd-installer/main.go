@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	ciliumclient "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/client"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 )
 
 func main() {
@@ -40,13 +41,18 @@ func main() {
 
 	restCfg, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
 	if err != nil {
-		logger.Error("Failed to build kubeconfig", "err", err, "path", *kubeconfig)
+		logger.Error("Failed to build kubeconfig",
+			logfields.Error, err,
+			logfields.Path, *kubeconfig,
+		)
 		os.Exit(1)
 	}
 
 	clientset, err := apiextensionsclient.NewForConfig(restCfg)
 	if err != nil {
-		logger.Error("Failed to create apiextensions clientset", "err", err)
+		logger.Error("Failed to create apiextensions clientset",
+			logfields.Error, err,
+		)
 		os.Exit(1)
 	}
 

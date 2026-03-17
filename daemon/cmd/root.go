@@ -27,8 +27,8 @@ import (
 func preScanInstanceID() {
 	args := os.Args[1:]
 	for i, arg := range args {
-		if strings.HasPrefix(arg, "--instance-id=") {
-			defaults.SetInstanceID(strings.TrimPrefix(arg, "--instance-id="))
+		if id, found := strings.CutPrefix(arg, "--instance-id="); found {
+			defaults.SetInstanceID(id)
 			return
 		}
 		if (arg == "--instance-id" || arg == "-instance-id") && i+1 < len(args) {

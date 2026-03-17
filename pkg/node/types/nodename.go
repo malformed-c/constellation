@@ -5,6 +5,7 @@ package types
 
 import (
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/cilium/cilium/pkg/defaults"
@@ -23,8 +24,8 @@ var (
 	// manages. In standard Cilium deployments this contains only nodeName.
 	// In Constellation (perigeos host sharding) it is populated dynamically
 	// by the node watcher from --managed-node-selector.
-	managedNodeNames     []string
-	managedNodeNamesMu   sync.RWMutex
+	managedNodeNames   []string
+	managedNodeNamesMu sync.RWMutex
 )
 
 // SetManagedNames sets the list of k8s node names whose pods this agent
@@ -51,12 +52,7 @@ func GetManagedNames() []string {
 
 // IsManaged returns true if the given node name is managed by this agent.
 func IsManaged(name string) bool {
-	for _, n := range GetManagedNames() {
-		if n == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(GetManagedNames(), name)
 }
 
 // SetName sets the name of the local node. This will overwrite the value that
