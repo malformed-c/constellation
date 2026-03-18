@@ -61,10 +61,9 @@ func discoverManagedNodes(ctx context.Context, cs client.Clientset, selector str
 	}
 
 	nodeWatcherLog.Info("Discovered managed nodes",
-		logfields.Selector, selector,
-		logfields.Count, len(names),
-		logfields.Nodes, names,
-	)
+		"selector", selector,
+		"count", len(names),
+		"nodes", names)
 	return names, nil
 }
 
@@ -201,16 +200,12 @@ func (nw *nodeWatcher) handleAdded(evt watch.Event) {
 	cfg := podReflectorConfig(nw.cs, nw.pods, name)
 	if err := k8s.RegisterReflector(nw.jg, nw.db, cfg); err != nil {
 		nw.logger.Error("Failed to register pod reflector for new node",
-			logfields.Node, name,
-			logfields.Error, err,
-		)
+			"node", name, logfields.Error, err)
 		return
 	}
 
 	nw.logger.Info("Discovered new managed node, started pod reflector",
-		logfields.Node, name,
-		logfields.Total, len(names),
-	)
+		"node", name, "total", len(names))
 }
 
 func (nw *nodeWatcher) handleDeleted(evt watch.Event) {
@@ -235,9 +230,7 @@ func (nw *nodeWatcher) handleDeleted(evt watch.Event) {
 	nodeTypes.SetManagedNames(names)
 
 	nw.logger.Info("Managed node removed",
-		logfields.Node, name,
-		logfields.Remaining, len(names),
-	)
+		"node", name, "remaining", len(names))
 }
 
 // knownNames returns a sorted slice of known node names. Must be called

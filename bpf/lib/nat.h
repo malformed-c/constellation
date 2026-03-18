@@ -322,7 +322,7 @@ snat_v4_nat_handle_mapping(struct __ctx_buff *ctx,
 
 	*state = __snat_lookup(map, tuple);
 
-	if (needs_ct) {
+	if (*state && needs_ct) {
 		struct ipv4_ct_tuple tuple_snat;
 		int ret;
 
@@ -903,8 +903,12 @@ __snat_v4_nat(struct __ctx_buff *ctx, struct ipv4_ct_tuple *tuple,
 		/* ICMP error message passes valid state, retains
 		 * old_port == new_port == 0, and thus skips port rewrite.
 		 */
-		to_sport = state->to_sport;
+		if (state)
+			to_sport = state->to_sport;
 	}
+
+	if (!state)
+		return DROP_NAT_NO_MAPPING;
 
 	ret = snat_v4_rewrite_headers(ctx, tuple->nexthdr, ETH_HLEN,
 				      ipfrag_has_l4_header(fraginfo), l4_off,
@@ -1442,7 +1446,7 @@ snat_v6_nat_handle_mapping(struct __ctx_buff *ctx,
 
 	*state = snat_v6_lookup(tuple);
 
-	if (needs_ct) {
+	if (*state && needs_ct) {
 		struct ipv6_ct_tuple tuple_snat;
 		int ret;
 
@@ -1889,8 +1893,12 @@ __snat_v6_nat(struct __ctx_buff *ctx, struct ipv6_ct_tuple *tuple,
 		/* ICMPv6 error message passes valid state, retains
 		 * old_port == new_port == 0, and thus skips port rewrite.
 		 */
-		to_sport = state->to_sport;
+		if (state)
+			to_sport = state->to_sport;
 	}
+
+	if (!state)
+		return DROP_NAT_NO_MAPPING;
 
 	ret = snat_v6_rewrite_headers(ctx, tuple->nexthdr, ETH_HLEN,
 				      ipfrag_has_l4_header(fraginfo), l4_off,

@@ -145,7 +145,8 @@ func (ipam *IPAM) ConfigureAllocator() {
 		if ipam.config.IPv4Enabled() {
 			if useManaged {
 				ipam.logger.Info("Managed IPAM: using per-pawn CiliumNode CIDRs",
-					"managedNodes", len(managedNames))
+					logfields.Nodes, len(managedNames),
+				)
 				ipam.ipv4Allocator = newManagedScopeAllocator(
 					context.TODO(),
 					ipam.logger,

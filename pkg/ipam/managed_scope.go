@@ -71,7 +71,9 @@ func newManagedScopeAllocator(
 		cn, err := cs.CiliumV2().CiliumNodes().Get(fetchCtx, name, metav1.GetOptions{})
 		if err != nil {
 			logger.Warn("Managed IPAM: could not fetch CiliumNode, skipping",
-				logfields.NodeName, name, logfields.Error, err)
+				logfields.NodeName, name,
+				logfields.Error, err,
+			)
 			continue
 		}
 
@@ -86,8 +88,9 @@ func newManagedScopeAllocator(
 	}
 
 	logger.Info("Managed IPAM: initialized",
-		"nodes", len(m.subs),
-		"totalCapacity", m.Capacity())
+		logfields.Nodes, len(m.subs),
+		logfields.Capacity, m.Capacity(),
+	)
 
 	return m
 }

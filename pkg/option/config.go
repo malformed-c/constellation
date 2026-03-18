@@ -1203,8 +1203,8 @@ type DaemonConfig struct {
 	// after.
 	shaSum [32]byte
 
-	CreationTime       time.Time
-	BpfDir             string // BPF template files directory
+	CreationTime time.Time
+	BpfDir       string // BPF template files directory
 	// InstanceID is the unique identifier for this agent instance. When set,
 	// runtime paths, BPF mounts and interface names are scoped under this ID.
 	InstanceID string
