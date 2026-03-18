@@ -5,13 +5,12 @@ package ipam
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"testing"
 )
 
-var testLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+var testLogger = slog.New(slog.DiscardHandler)
 
 func parseCIDR(t *testing.T, s string) *net.IPNet {
 	t.Helper()
