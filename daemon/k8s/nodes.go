@@ -3,7 +3,7 @@
 
 package k8s
 
-// Node watcher for --managed-node-selector.
+// Node watcher for --managed-nodes-selector.
 //
 // When the agent is configured with a label selector (e.g.
 // perigeos.io/host=engix99), this module discovers the k8s Node objects

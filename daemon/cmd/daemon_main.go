@@ -97,8 +97,8 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags.String(option.InstanceID, "", "Unique identifier for this agent instance; namespaces runtime paths, BPF mounts and interface names so multiple agents can coexist on the same host (e.g. --instance-id=worker0)")
 	option.BindEnv(vp, option.InstanceID)
 
-	flags.String(option.ManagedNodeSelector, "", "Kubernetes label selector for nodes this agent manages. When set, the agent watches matching Node objects and manages their pods dynamically. Pass a bare label key (e.g. perigeos.io/host) to auto-append =<hostname>. Empty = standard single-node mode.")
-	option.BindEnv(vp, option.ManagedNodeSelector)
+	flags.String(option.ManagedNodesSelector, "", "Kubernetes label selector for nodes this agent manages. When set, the agent watches matching Node objects and manages their pods dynamically. Pass a bare label key (e.g. perigeos.io/host) to auto-append =<hostname>. Empty = standard single-node mode.")
+	option.BindEnv(vp, option.ManagedNodesSelector)
 
 	// Validators
 	option.Config.FixedIdentityMappingValidator = option.Validator(func(val string) error {
@@ -1042,7 +1042,7 @@ func initEnv(logger *slog.Logger, vp *viper.Viper) {
 	}
 
 	// Managed node names are now discovered dynamically by the node watcher
-	// inside NewPodTableAndReflector when --managed-node-selector is set.
+	// inside NewPodTableAndReflector when --managed-nodes-selector is set.
 	// No static SetManagedNames call needed here.
 
 	bpf.CheckOrMountFS(logger, option.Config.BPFRoot)

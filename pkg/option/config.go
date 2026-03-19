@@ -268,12 +268,12 @@ const (
 	// multiple agents can coexist on the same host.
 	InstanceID = "instance-id"
 
-	// ManagedNodeSelector is a Kubernetes label selector for discovering
+	// ManagedNodesSelector is a Kubernetes label selector for discovering
 	// which Node objects this agent manages. The agent watches matching
 	// nodes and creates per-node pod reflectors dynamically.
 	// If the value contains no "=" (bare label key), the agent appends
 	// "=<os.Hostname()>" automatically. Empty = standard single-node mode.
-	ManagedNodeSelector = "managed-node-selector"
+	ManagedNodesSelector = "managed-nodes-selector"
 
 	// LibDir enables the directory path to store runtime build environment
 	LibDir = "lib-dir"
@@ -1209,10 +1209,10 @@ type DaemonConfig struct {
 	// runtime paths, BPF mounts and interface names are scoped under this ID.
 	InstanceID string
 
-	// ManagedNodeSelector is the label selector string for discovering
-	// managed nodes dynamically. Populated from --managed-node-selector.
+	// ManagedNodesSelector is the label selector string for discovering
+	// managed nodes dynamically. Populated from --managed-nodes-selector.
 	// Empty means single-node mode (standard Cilium behaviour).
-	ManagedNodeSelector string
+	ManagedNodesSelector string
 
 	LibDir             string // Cilium library files directory
 	RunDir             string // Cilium runtime directory
@@ -2483,7 +2483,7 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 	c.AllocatorListTimeout = vp.GetDuration(AllocatorListTimeoutName)
 	c.KeepConfig = vp.GetBool(KeepConfig)
 	c.InstanceID = vp.GetString(InstanceID)
-	if sel := vp.GetString(ManagedNodeSelector); sel != "" {
+	if sel := vp.GetString(ManagedNodesSelector); sel != "" {
 		// Bare label key (no "=") → append "=<hostname>" so the selector
 		// resolves to the current physical host automatically.
 		if !strings.Contains(sel, "=") {
@@ -2491,7 +2491,7 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 				sel = sel + "=" + h
 			}
 		}
-		c.ManagedNodeSelector = sel
+		c.ManagedNodesSelector = sel
 	}
 	c.LabelPrefixFile = vp.GetString(LabelPrefixFile)
 	c.Labels = vp.GetStringSlice(Labels)

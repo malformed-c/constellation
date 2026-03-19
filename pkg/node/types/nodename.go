@@ -22,7 +22,7 @@ var (
 	// managedNodeNames is the set of k8s node names whose pods this agent
 	// manages. In standard Cilium deployments this contains only nodeName.
 	// In Constellation (perigeos host sharding) it is populated dynamically
-	// by the node watcher from --managed-node-selector.
+	// by the node watcher from --managed-nodes-selector.
 	managedNodeNames     []string
 	managedNodeNamesMu   sync.RWMutex
 )

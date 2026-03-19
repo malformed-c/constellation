@@ -1,49 +1,57 @@
 # Constellation
 
-Constellation is a fork of [Cilium](https://github.com/cilium/cilium) designed for the [Perigeos](https://github.com/malformed-c/perigeos) host sharding model, where multiple virtual nodes (pawns) run on a single physical host.
+Constellation is a fork of [Cilium](https://github.com/cilium/cilium) adapted for the [Perigeos](https://github.com/malformed-c/perigeos) host-sharding model, where multiple virtual Kubernetes nodes (pawns) run on a single physical host managed by a single CNI agent.
 
 ## Why fork?
 
-Cilium assumes one agent per host. Its BPF maps, network interfaces, sockets, and runtime paths are all named as singletons — `cilium_host`, `/var/run/cilium/cilium.sock`, `/sys/fs/bpf/tc/globals/`, etc. Running two Cilium agents on the same host causes them to fight over these resources.
+Cilium assumes one agent per physical host. Its BPF maps, network interfaces, and runtime paths are singletons — `cilium_host`, `/var/run/cilium/cilium.sock`, `/sys/fs/bpf/tc/globals/`, etc.
 
-Constellation adds a single `--instance-id` flag that namespaces every singleton under a unique identifier, allowing one agent per pawn rather than one agent per host.
+Constellation adds `--managed-nodes-selector`, a label selector that lets one agent manage all pawn nodes sharing a host. The agent handles IPAM, endpoint management, and datapath for all pawns simultaneously.
 
 ## What changed from Cilium
 
-Everything derives from four root paths that are now instance-scoped:
+| Feature | Description |
+|---|---|
+| `--managed-nodes-selector` | Label selector for discovering pawn nodes. Pass a bare label key (e.g. `perigeos.io/host`) to auto-append `=<hostname>`. |
+| `managedScopeAllocator` | IPAM allocator that merges per-pawn CIDRs into a single round-robin pool. Each pawn gets its own `/20` (or configured size) from its CiliumNode. |
+| Pod reflector | Watches pods across all managed node names, not just the local node. |
+| Endpoint restore | Restores endpoints for pods on any managed node after agent restart. |
 
-| Resource | Cilium | Constellation |
-|---|---|---|
-| Runtime dir | `/var/run/cilium/` | `/var/run/cilium/<id>/` |
-| State dir | `/var/lib/cilium/` | `/var/lib/cilium/<id>/` |
-| BPF pin path | `/sys/fs/bpf/` | `/sys/fs/bpf/constellation/<id>/` |
-| Host interface | `cilium_host` | `cilium_host_<id>` |
+Everything else derives from Cilium unmodified.
 
-Sockets, pidfile, certs, BPF map pins, and tunnel interfaces all inherit from these roots — no other callers needed changing.
+## Deployment
 
-**eBPF-only mode is required.** Constellation does not support iptables/nftables fallback paths. Run with `--kube-proxy-replacement=strict`.
+Constellation runs as a DaemonSet (or perigeos-managed pod) on the physical host node:
 
-## Usage
-
-```bash
-constellation-agent --instance-id=pawn-0 [other cilium flags...]
+```yaml
+args:
+  - --managed-nodes-selector=perigeos.io/host
+  - --routing-mode=tunnel
+  - --kube-proxy-replacement=true
+  - --ipam=cluster-pool
+  - --bpf-lb-sock-hostns-only=true
 ```
 
-The `instance-id` must match the pawn name configured in Perigeos. Perigeos generates the CNI config automatically and passes the correct instance ID through the CNI invocation.
+The `--managed-nodes-selector=perigeos.io/host` flag auto-appends `=<hostname>`, so the agent discovers all nodes labeled `perigeos.io/host=<this-host>`.
+
+See `deploy/constellation/` in the perigeos repo for full manifests.
+
+## IPAM
+
+Each pawn node has a CiliumNode with its own pod CIDR. Constellation's `managedScopeAllocator` merges all pawn CIDRs into one pool and allocates round-robin. This scales to 30+ pawns × 4094 IPs per pawn from a single agent.
+
+The constellation-operator (part of perigeos) creates and manages the CiliumNode resources.
 
 ## Images
 
-Images are published to `ghcr.io/malformed-c/`:
-
-- `constellation-agent` — the main agent (fork of `cilium/cilium`)
-- `constellation-operator` — cluster operator
-- `constellation-hubble-relay` — Hubble relay
+```
+ghcr.io/malformed-c/constellation-agent     — CNI agent
+ghcr.io/malformed-c/constellation-operator  — CiliumNode/IPAM operator
+```
 
 ## Relationship to Cilium
 
-Constellation tracks Cilium's `main` branch. The diff is intentionally minimal — one flag, four root path vars, and interface name vars. This keeps rebasing straightforward.
-
-Upstream Cilium history is squashed into a single base commit. Constellation-specific commits follow on top.
+Constellation tracks Cilium's `main` branch. The diff is intentionally minimal to keep rebasing straightforward. Upstream Cilium history is squashed into a single base commit; Constellation-specific commits follow on top.
 
 ## License
 

@@ -108,7 +108,7 @@ func NewPodTableAndReflector(jg job.Group, db *statedb.DB, cs client.Clientset) 
 		return pods, nil
 	}
 
-	selector := option.Config.ManagedNodeSelector
+	selector := option.Config.ManagedNodesSelector
 	if selector != "" {
 		// Label-selector mode: discover nodes matching the selector,
 		// create a pod reflector per node, and start a background
