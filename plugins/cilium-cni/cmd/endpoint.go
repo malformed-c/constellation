@@ -73,6 +73,14 @@ func (c *defaultEndpointConfiguration) IfName() string {
 }
 
 func (c *defaultEndpointConfiguration) IPAMPool() string {
+	// When running under perigeos, K8S_POD_NODE_NAME identifies the pawn
+	// (virtual node) this pod is scheduled on. The managed IPAM allocator
+	// uses the node name as the pool key to route allocations to the
+	// correct per-pawn CIDR. Without this, all pods get IPs from the
+	// host node's default pool.
+	if nodeName := string(c.CniArgs.K8S_POD_NODE_NAME); nodeName != "" {
+		return nodeName
+	}
 	return "" // auto-select
 }
 
