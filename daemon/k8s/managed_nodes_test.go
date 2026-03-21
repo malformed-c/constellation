@@ -12,6 +12,7 @@ package k8s
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -516,4 +517,112 @@ func TestManagedNodesSelector_NodeRemoval(t *testing.T) {
 	// Pod on pawn-1 must still be in the table.
 	require.True(t, podExists(t, tbl, db, "default", "pod-1"),
 		"pod on surviving node must remain in table")
+}
+
+// ─── NodeAddedCallback tests ─────────────────────────────────────────────────
+
+// clearNodeCallbacks resets the global node-added callback list after test.
+func clearNodeCallbacks(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() { ResetNodeAddedCallbacks() })
+}
+
+// TestNodeAddedCallback_FiredOnDynamicAdd verifies that registered
+// NodeAddedCallbacks are invoked when the node watcher detects a new node.
+// This is the mechanism IPAM uses to dynamically add per-pawn sub-allocators.
+func TestNodeAddedCallback_FiredOnDynamicAdd(t *testing.T) {
+	clearManagedNames(t)
+	clearSelector(t)
+	clearNodeCallbacks(t)
+	nodeTypes.SetName("host-cb")
+
+	// Register a callback that records added node names.
+	var (
+		mu    sync.Mutex
+		added []string
+	)
+	RegisterNodeAddedCallback(func(name string) {
+		mu.Lock()
+		defer mu.Unlock()
+		added = append(added, name)
+	})
+
+	// Start with one node.
+	nodes := []*slim_corev1.Node{
+		slimNode("pawn-init", map[string]string{"perigeos.io/host": "rack-cb"}),
+	}
+	_, _, cs := selectorHiveWithTable(t, "perigeos.io/host=rack-cb", nodes)
+	ctx := t.Context()
+
+	// Dynamically add a new node.
+	_, err := cs.Slim().CoreV1().Nodes().Create(ctx,
+		slimNode("pawn-late", map[string]string{"perigeos.io/host": "rack-cb"}),
+		meta_v1.CreateOptions{})
+	require.NoError(t, err)
+
+	// Wait for the callback to fire.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, n := range added {
+			if n == "pawn-late" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond,
+		"NodeAddedCallback must be invoked for dynamically added node")
+
+	// The initial node should NOT have triggered the callback (it was
+	// already known at startup).
+	mu.Lock()
+	for _, n := range added {
+		if n == "pawn-init" {
+			t.Error("callback should not fire for nodes already known at startup")
+		}
+	}
+	mu.Unlock()
+}
+
+// TestNodeAddedCallback_MultipleCallbacks verifies that multiple registered
+// callbacks are all invoked when a new node is added.
+func TestNodeAddedCallback_MultipleCallbacks(t *testing.T) {
+	clearManagedNames(t)
+	clearSelector(t)
+	clearNodeCallbacks(t)
+	nodeTypes.SetName("host-mcb")
+
+	var (
+		mu     sync.Mutex
+		count1 int
+		count2 int
+	)
+	RegisterNodeAddedCallback(func(name string) {
+		mu.Lock()
+		defer mu.Unlock()
+		count1++
+	})
+	RegisterNodeAddedCallback(func(name string) {
+		mu.Lock()
+		defer mu.Unlock()
+		count2++
+	})
+
+	nodes := []*slim_corev1.Node{
+		slimNode("pawn-a", map[string]string{"perigeos.io/host": "rack-mcb"}),
+	}
+	_, _, cs := selectorHiveWithTable(t, "perigeos.io/host=rack-mcb", nodes)
+	ctx := t.Context()
+
+	_, err := cs.Slim().CoreV1().Nodes().Create(ctx,
+		slimNode("pawn-b", map[string]string{"perigeos.io/host": "rack-mcb"}),
+		meta_v1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return count1 > 0 && count2 > 0
+	}, 5*time.Second, 50*time.Millisecond,
+		"both registered callbacks must be invoked")
 }

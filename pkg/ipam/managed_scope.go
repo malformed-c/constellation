@@ -24,15 +24,19 @@ import (
 
 // managedScopeAllocator extends ClusterPool IPAM to support multiple managed
 // nodes (perigeos pawns) sharing a single agent. Each managed node's
-// CiliumNode provides a /24 CIDR; this allocator merges them into one pool
-// and distributes allocations round-robin across sub-allocators.
+// CiliumNode provides a CIDR; this allocator routes allocations to the
+// correct per-node sub-allocator based on the pool parameter (node name).
+//
+// When pool is non-empty, the allocation is routed to the sub-allocator for
+// that node. When pool is empty, allocation falls back to the primary
+// (infrastructure) node's sub-allocator.
 type managedScopeAllocator struct {
 	logger *slog.Logger
 
-	mu        sync.Mutex
-	subs      []*subAllocator // ordered list of sub-allocators
-	subByNode map[string]*subAllocator
-	nextIdx   int // round-robin index
+	mu          sync.Mutex
+	subs        []*subAllocator // ordered list of sub-allocators
+	subByNode   map[string]*subAllocator
+	primaryNode string // name of the infrastructure/primary node (fallback)
 }
 
 type subAllocator struct {
@@ -49,13 +53,14 @@ func newManagedScopeAllocator(
 	cs client.Clientset,
 	primaryCIDR *net.IPNet,
 ) *managedScopeAllocator {
+	localName := nodeTypes.GetName()
 	m := &managedScopeAllocator{
-		logger:    logger,
-		subByNode: make(map[string]*subAllocator),
+		logger:      logger,
+		subByNode:   make(map[string]*subAllocator),
+		primaryNode: localName,
 	}
 
 	// Always include the primary node's CIDR.
-	localName := nodeTypes.GetName()
 	m.addCIDR(localName, primaryCIDR)
 
 	// Fetch CiliumNodes for all managed names (except the primary, already added).
@@ -105,6 +110,19 @@ func (m *managedScopeAllocator) addCIDR(nodeName string, cidr *net.IPNet) {
 		logfields.V4Prefix, cidr.String())
 }
 
+// AddCIDR adds a sub-allocator for a node that was not available at init
+// time (e.g. a pawn whose CiliumNode was created after the agent started).
+// Safe for concurrent use. No-op if the node already has a sub-allocator.
+func (m *managedScopeAllocator) AddCIDR(nodeName string, cidr *net.IPNet) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.subByNode[nodeName]; exists {
+		return
+	}
+	m.addCIDR(nodeName, cidr)
+}
+
 // findSubForIP returns the sub-allocator whose CIDR contains ip.
 func (m *managedScopeAllocator) findSubForIP(ipAddr net.IP) *subAllocator {
 	for _, sub := range m.subs {
@@ -113,6 +131,17 @@ func (m *managedScopeAllocator) findSubForIP(ipAddr net.IP) *subAllocator {
 		}
 	}
 	return nil
+}
+
+// resolvePool returns the sub-allocator for the given pool (node name).
+// If pool is empty, returns the primary node's sub-allocator.
+// If pool doesn't match any known node, returns nil.
+func (m *managedScopeAllocator) resolvePool(pool Pool) *subAllocator {
+	name := string(pool)
+	if name == "" {
+		name = m.primaryNode
+	}
+	return m.subByNode[name]
 }
 
 // Allocate allocates a specific IP. Routes to the sub-allocator owning the CIDR.
@@ -128,7 +157,7 @@ func (m *managedScopeAllocator) Allocate(ipAddr net.IP, owner string, pool Pool)
 	if err := sub.allocator.Allocate(ipAddr); err != nil {
 		return nil, err
 	}
-	return &AllocationResult{IP: ipAddr}, nil
+	return &AllocationResult{IP: ipAddr, IPPoolName: Pool(sub.nodeName)}, nil
 }
 
 // AllocateWithoutSyncUpstream is identical to Allocate for host-scope.
@@ -150,27 +179,29 @@ func (m *managedScopeAllocator) Release(ipAddr net.IP, pool Pool) error {
 	return nil
 }
 
-// AllocateNext allocates the next available IP using round-robin across
-// sub-allocators. If a sub-allocator is full, the next one is tried.
+// AllocateNext allocates the next available IP from the pool identified by
+// the pool parameter (node name). If pool is non-empty and matches a known
+// node, allocation comes from that node's CIDR. If pool is empty, falls
+// back to the primary (infrastructure) node's sub-allocator.
 func (m *managedScopeAllocator) AllocateNext(owner string, pool Pool) (*AllocationResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	n := len(m.subs)
-	for range n {
-		sub := m.subs[m.nextIdx%n]
-		m.nextIdx++
-
-		ipAddr, err := sub.allocator.AllocateNext()
-		if err != nil {
-			// This sub-allocator is full, try the next one.
-			continue
-		}
-
-		return &AllocationResult{IP: ipAddr}, nil
+	sub := m.resolvePool(pool)
+	if sub == nil {
+		// Unknown pool — fall back to primary.
+		m.logger.Warn("Managed IPAM: unknown pool, falling back to primary",
+			logfields.PoolName, string(pool),
+			logfields.NodeName, m.primaryNode)
+		sub = m.subByNode[m.primaryNode]
 	}
 
-	return nil, fmt.Errorf("all managed CIDR pools exhausted (%d pools)", n)
+	ipAddr, err := sub.allocator.AllocateNext()
+	if err != nil {
+		return nil, fmt.Errorf("pool %q (%s) exhausted: %w", sub.nodeName, sub.allocCIDR, err)
+	}
+
+	return &AllocationResult{IP: ipAddr, IPPoolName: Pool(sub.nodeName)}, nil
 }
 
 // AllocateNextWithoutSyncUpstream is identical to AllocateNext for host-scope.

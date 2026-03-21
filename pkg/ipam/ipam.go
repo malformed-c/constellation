@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/cilium/hive/job"
 	"github.com/cilium/statedb"
@@ -24,6 +25,7 @@ import (
 	"github.com/cilium/cilium/pkg/node"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Family is the type describing all address families support by the IP
@@ -152,6 +154,12 @@ func (ipam *IPAM) ConfigureAllocator() {
 					ipam.clientset,
 					ipam.nodeAddressing.IPv4().AllocationCIDR().IPNet,
 				)
+
+				// Register a callback so that late-arriving pawns get their
+				// CiliumNode CIDR added to the managed allocator dynamically.
+				agentK8s.RegisterNodeAddedCallback(func(nodeName string) {
+					ipam.addManagedNodeCIDR(nodeName)
+				})
 			} else {
 				ipam.ipv4Allocator = newHostScopeAllocator(ipam.nodeAddressing.IPv4().AllocationCIDR().IPNet)
 			}
@@ -245,6 +253,35 @@ func (ipam *IPAM) ExcludeIP(ip net.IP, owner string, pool Pool) {
 func (ipam *IPAM) isIPExcluded(ip net.IP, pool Pool) (string, bool) {
 	owner, ok := ipam.excludedIPs[pool.String()+":"+ip.String()]
 	return owner, ok
+}
+
+// addManagedNodeCIDR fetches the CiliumNode for the given node name and adds
+// its IPv4 podCIDR to the managed-scope allocator. Called by the node watcher
+// callback when a new pawn is discovered after IPAM initialization.
+func (ipam *IPAM) addManagedNodeCIDR(nodeName string) {
+	m, ok := ipam.ipv4Allocator.(*managedScopeAllocator)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cn, err := ipam.clientset.CiliumV2().CiliumNodes().Get(ctx, nodeName, metav1.GetOptions{})
+	if err != nil {
+		ipam.logger.Warn("Managed IPAM: could not fetch CiliumNode for new node",
+			logfields.NodeName, nodeName, logfields.Error, err)
+		return
+	}
+
+	cidr := ciliumNodeIPv4CIDR(cn)
+	if cidr == nil {
+		ipam.logger.Warn("Managed IPAM: new node has no IPv4 podCIDR",
+			logfields.NodeName, nodeName)
+		return
+	}
+
+	m.AddCIDR(nodeName, cidr)
 }
 
 // PoolOrDefault returns the default pool if no pool is specified.

@@ -37,6 +37,41 @@ import (
 
 var nodeWatcherLog = logging.DefaultSlogLogger.With(logfields.LogSubsys, "node-watcher")
 
+// NodeAddedCallback is called when a new managed node is discovered by the
+// watcher. Used by IPAM to dynamically add per-node sub-allocators.
+type NodeAddedCallback func(nodeName string)
+
+var (
+	nodeAddedCallbackMu sync.Mutex
+	nodeAddedCallbacks  []NodeAddedCallback
+)
+
+// RegisterNodeAddedCallback registers a callback that will be invoked
+// whenever a new managed node is discovered by the node watcher.
+func RegisterNodeAddedCallback(cb NodeAddedCallback) {
+	nodeAddedCallbackMu.Lock()
+	defer nodeAddedCallbackMu.Unlock()
+	nodeAddedCallbacks = append(nodeAddedCallbacks, cb)
+}
+
+// ResetNodeAddedCallbacks clears all registered callbacks. For testing only.
+func ResetNodeAddedCallbacks() {
+	nodeAddedCallbackMu.Lock()
+	defer nodeAddedCallbackMu.Unlock()
+	nodeAddedCallbacks = nil
+}
+
+func fireNodeAdded(name string) {
+	nodeAddedCallbackMu.Lock()
+	cbs := make([]NodeAddedCallback, len(nodeAddedCallbacks))
+	copy(cbs, nodeAddedCallbacks)
+	nodeAddedCallbackMu.Unlock()
+
+	for _, cb := range cbs {
+		cb(name)
+	}
+}
+
 // discoverManagedNodes lists k8s Node objects matching selector and returns
 // their names. It also calls nodeTypes.SetManagedNames so that IsManaged()
 // works immediately after this function returns.
@@ -206,6 +241,9 @@ func (nw *nodeWatcher) handleAdded(evt watch.Event) {
 
 	nw.logger.Info("Discovered new managed node, started pod reflector",
 		"node", name, "total", len(names))
+
+	// Notify callbacks (e.g. IPAM) about the new node.
+	fireNodeAdded(name)
 }
 
 func (nw *nodeWatcher) handleDeleted(evt watch.Event) {

@@ -32,46 +32,85 @@ func newTestManagedAllocator(t *testing.T, cidrs ...string) *managedScopeAllocat
 		name := fmt.Sprintf("node-%02d", i)
 		m.addCIDR(name, parseCIDR(t, cidrStr))
 	}
+	// Set primary to the first node.
+	if len(cidrs) > 0 {
+		m.primaryNode = "node-00"
+	}
 	return m
 }
 
-func TestManagedScope_AllocateNext_RoundRobin(t *testing.T) {
-	m := newTestManagedAllocator(t, "10.0.0.0/30", "10.0.1.0/30")
-	// /30 = 4 addresses, 2 usable (network + broadcast excluded by ipallocator)
+func TestManagedScope_AllocateNext_PoolRouting(t *testing.T) {
+	m := &managedScopeAllocator{
+		logger:      testLogger,
+		subByNode:   make(map[string]*subAllocator),
+		primaryNode: "primary",
+	}
+	m.addCIDR("primary", parseCIDR(t, "10.0.0.0/24"))
+	m.addCIDR("pawn-01", parseCIDR(t, "10.0.1.0/24"))
+	m.addCIDR("pawn-02", parseCIDR(t, "10.0.2.0/24"))
 
-	seen := map[string]bool{}
-	for i := range 4 {
-		result, err := m.AllocateNext(fmt.Sprintf("owner-%d", i), PoolDefault())
-		if err != nil {
-			t.Fatalf("AllocateNext %d: %v", i, err)
-		}
-		seen[result.IP.String()] = true
+	// Allocate from pawn-01's pool
+	r1, err := m.AllocateNext("owner-1", Pool("pawn-01"))
+	if err != nil {
+		t.Fatalf("AllocateNext pawn-01: %v", err)
+	}
+	if !parseCIDR(t, "10.0.1.0/24").Contains(r1.IP) {
+		t.Errorf("expected IP from 10.0.1.0/24, got %s", r1.IP)
+	}
+	if r1.IPPoolName != Pool("pawn-01") {
+		t.Errorf("expected IPPoolName=pawn-01, got %s", r1.IPPoolName)
 	}
 
-	// Should have IPs from both CIDRs
-	has0 := false
-	has1 := false
-	for ip := range seen {
-		parsed := net.ParseIP(ip)
-		if parseCIDR(t, "10.0.0.0/30").Contains(parsed) {
-			has0 = true
-		}
-		if parseCIDR(t, "10.0.1.0/30").Contains(parsed) {
-			has1 = true
-		}
+	// Allocate from pawn-02's pool
+	r2, err := m.AllocateNext("owner-2", Pool("pawn-02"))
+	if err != nil {
+		t.Fatalf("AllocateNext pawn-02: %v", err)
 	}
-	if !has0 || !has1 {
-		t.Errorf("expected IPs from both CIDRs, got: %v", seen)
+	if !parseCIDR(t, "10.0.2.0/24").Contains(r2.IP) {
+		t.Errorf("expected IP from 10.0.2.0/24, got %s", r2.IP)
+	}
+	if r2.IPPoolName != Pool("pawn-02") {
+		t.Errorf("expected IPPoolName=pawn-02, got %s", r2.IPPoolName)
+	}
+
+	// Empty pool falls back to primary
+	r3, err := m.AllocateNext("owner-3", Pool(""))
+	if err != nil {
+		t.Fatalf("AllocateNext empty pool: %v", err)
+	}
+	if !parseCIDR(t, "10.0.0.0/24").Contains(r3.IP) {
+		t.Errorf("expected IP from primary 10.0.0.0/24, got %s", r3.IP)
+	}
+	if r3.IPPoolName != Pool("primary") {
+		t.Errorf("expected IPPoolName=primary, got %s", r3.IPPoolName)
+	}
+}
+
+func TestManagedScope_AllocateNext_UnknownPoolFallback(t *testing.T) {
+	m := &managedScopeAllocator{
+		logger:      testLogger,
+		subByNode:   make(map[string]*subAllocator),
+		primaryNode: "primary",
+	}
+	m.addCIDR("primary", parseCIDR(t, "10.0.0.0/24"))
+
+	// Unknown pool name should fall back to primary
+	result, err := m.AllocateNext("owner", Pool("nonexistent-pawn"))
+	if err != nil {
+		t.Fatalf("AllocateNext unknown pool: %v", err)
+	}
+	if !parseCIDR(t, "10.0.0.0/24").Contains(result.IP) {
+		t.Errorf("expected fallback to primary CIDR, got %s", result.IP)
 	}
 }
 
 func TestManagedScope_AllocateNext_Exhaustion(t *testing.T) {
-	m := newTestManagedAllocator(t, "10.0.0.0/30", "10.0.1.0/30")
+	m := newTestManagedAllocator(t, "10.0.0.0/30")
 
-	// Allocate all available IPs
+	// Allocate all available IPs from node-00 (the only pool, also primary)
 	var count int
 	for {
-		_, err := m.AllocateNext(fmt.Sprintf("owner-%d", count), PoolDefault())
+		_, err := m.AllocateNext(fmt.Sprintf("owner-%d", count), Pool("node-00"))
 		if err != nil {
 			break
 		}
@@ -96,6 +135,9 @@ func TestManagedScope_AllocateAndRelease(t *testing.T) {
 	}
 	if !result.IP.Equal(ip) {
 		t.Errorf("got %s, want %s", result.IP, ip)
+	}
+	if result.IPPoolName != Pool("node-00") {
+		t.Errorf("expected IPPoolName=node-00, got %s", result.IPPoolName)
 	}
 
 	// Double allocate should fail
@@ -146,7 +188,7 @@ func TestManagedScope_Capacity(t *testing.T) {
 func TestManagedScope_Dump(t *testing.T) {
 	m := newTestManagedAllocator(t, "10.0.0.0/24")
 
-	_, err := m.AllocateNext("owner-1", PoolDefault())
+	_, err := m.AllocateNext("owner-1", Pool("node-00"))
 	if err != nil {
 		t.Fatalf("AllocateNext: %v", err)
 	}
@@ -160,38 +202,38 @@ func TestManagedScope_Dump(t *testing.T) {
 	}
 }
 
-func TestManagedScope_SkipsFullAllocator(t *testing.T) {
-	// Use /30 (4 addrs, 2 usable) and /24 (256 addrs, 254 usable).
-	// Exhaust the /30 by allocating specific IPs, then verify AllocateNext
-	// still works by falling through to the /24.
-	m := newTestManagedAllocator(t, "10.0.0.0/30", "10.0.1.0/24")
+func TestManagedScope_AddCIDR_Dynamic(t *testing.T) {
+	m := &managedScopeAllocator{
+		logger:      testLogger,
+		subByNode:   make(map[string]*subAllocator),
+		primaryNode: "primary",
+	}
+	m.addCIDR("primary", parseCIDR(t, "10.0.0.0/24"))
 
-	cidr30 := parseCIDR(t, "10.0.0.0/30")
+	// Dynamically add a new node's CIDR.
+	m.AddCIDR("pawn-new", parseCIDR(t, "10.0.5.0/24"))
 
-	// Exhaust the /30 pool by allocating specific IPs (10.0.0.1 and 10.0.0.2).
-	for _, ipStr := range []string{"10.0.0.1", "10.0.0.2"} {
-		_, err := m.Allocate(net.ParseIP(ipStr), "fill-"+ipStr, PoolDefault())
-		if err != nil {
-			t.Fatalf("Allocate(%s): %v", ipStr, err)
-		}
+	// Allocate from the dynamically added pool.
+	result, err := m.AllocateNext("owner", Pool("pawn-new"))
+	if err != nil {
+		t.Fatalf("AllocateNext from dynamic pool: %v", err)
+	}
+	if !parseCIDR(t, "10.0.5.0/24").Contains(result.IP) {
+		t.Errorf("expected IP from 10.0.5.0/24, got %s", result.IP)
 	}
 
-	// Now AllocateNext should skip the full /30 and return IPs from the /24.
-	for i := range 5 {
-		result, err := m.AllocateNext(fmt.Sprintf("next-%d", i), PoolDefault())
-		if err != nil {
-			t.Fatalf("AllocateNext %d after /30 exhaustion: %v", i, err)
-		}
-		if cidr30.Contains(result.IP) {
-			t.Errorf("AllocateNext %d returned %s from exhausted /30", i, result.IP)
-		}
+	// Adding the same node again is a no-op.
+	m.AddCIDR("pawn-new", parseCIDR(t, "10.0.6.0/24"))
+	if len(m.subs) != 2 {
+		t.Errorf("expected 2 sub-allocators after duplicate AddCIDR, got %d", len(m.subs))
 	}
 }
 
 func TestManagedScope_MultipleNodes(t *testing.T) {
 	m := &managedScopeAllocator{
-		logger:    testLogger,
-		subByNode: make(map[string]*subAllocator),
+		logger:      testLogger,
+		subByNode:   make(map[string]*subAllocator),
+		primaryNode: "primary",
 	}
 	m.addCIDR("primary", parseCIDR(t, "10.0.0.0/24"))
 	m.addCIDR("pawn-01", parseCIDR(t, "10.0.1.0/24"))
