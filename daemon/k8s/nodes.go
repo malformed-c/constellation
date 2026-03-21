@@ -220,33 +220,35 @@ func (nw *nodeWatcher) handleAdded(evt watch.Event) {
 	name := obj.GetName()
 
 	nw.mu.Lock()
-	defer nw.mu.Unlock()
-
-	if _, exists := nw.known[name]; exists {
-		return // already tracking
-	}
+	_, alreadyKnown := nw.known[name]
 	nw.known[name] = struct{}{}
 
-	// Update managed names.
-	names := nw.knownNames()
-	nodeTypes.SetManagedNames(names)
+	if !alreadyKnown {
+		// Update managed names.
+		names := nw.knownNames()
+		nodeTypes.SetManagedNames(names)
 
-	// Register a new pod reflector for this node.
-	cfg := podReflectorConfig(nw.cs, nw.pods, name)
-	if err := k8s.RegisterReflector(nw.jg, nw.db, cfg); err != nil {
-		nw.logger.Error("Failed to register pod reflector for new node",
+		// Register a new pod reflector for this node.
+		cfg := podReflectorConfig(nw.cs, nw.pods, name)
+		if err := k8s.RegisterReflector(nw.jg, nw.db, cfg); err != nil {
+			nw.logger.Error("Failed to register pod reflector for new node",
+				logfields.Node, name,
+				logfields.Error, err,
+			)
+			nw.mu.Unlock()
+			return
+		}
+
+		nw.logger.Info("Discovered new managed node, started pod reflector",
 			logfields.Node, name,
-			logfields.Error, err,
+			logfields.Total, len(names),
 		)
-		return
 	}
+	nw.mu.Unlock()
 
-	nw.logger.Info("Discovered new managed node, started pod reflector",
-		logfields.Node, name,
-		logfields.Total, len(names),
-	)
-
-	// Notify callbacks (e.g. IPAM) about the new node.
+	// Always notify callbacks — even for known nodes. On watch reconnect,
+	// Added events fire for all existing nodes. IPAM uses this to detect
+	// CiliumNode CIDR changes (e.g. after CiliumNode deletion/recreation).
 	fireNodeAdded(name)
 }
 

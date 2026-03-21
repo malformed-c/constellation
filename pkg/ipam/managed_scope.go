@@ -113,17 +113,38 @@ func (m *managedScopeAllocator) addCIDR(nodeName string, cidr *net.IPNet) {
 		logfields.V4Prefix, cidr.String())
 }
 
-// AddCIDR adds a sub-allocator for a node that was not available at init
-// time (e.g. a pawn whose CiliumNode was created after the agent started).
-// Safe for concurrent use. No-op if the node already has a sub-allocator.
+// AddCIDR adds or updates a sub-allocator for a managed node. If the node
+// already has a sub-allocator with the same CIDR, this is a no-op. If the
+// CIDR has changed (e.g. after CiliumNode deletion and recreation), the old
+// sub-allocator is replaced. Safe for concurrent use.
 func (m *managedScopeAllocator) AddCIDR(nodeName string, cidr *net.IPNet) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, exists := m.subByNode[nodeName]; exists {
-		return
+	if existing, ok := m.subByNode[nodeName]; ok {
+		if existing.allocCIDR.String() == cidr.String() {
+			return // same CIDR, nothing to do
+		}
+		// CIDR changed — replace the sub-allocator.
+		m.removeCIDRLocked(nodeName)
+		m.logger.Info("Managed IPAM: CIDR changed, replacing sub-allocator",
+			logfields.NodeName, nodeName,
+			logfields.V4Prefix, cidr.String())
 	}
 	m.addCIDR(nodeName, cidr)
+}
+
+// removeCIDRLocked removes the sub-allocator for a node. Must be called
+// with m.mu held. Any IPs still allocated from the old CIDR become
+// untracked — callers should ensure pods using old IPs are restarted.
+func (m *managedScopeAllocator) removeCIDRLocked(nodeName string) {
+	delete(m.subByNode, nodeName)
+	for i, sub := range m.subs {
+		if sub.nodeName == nodeName {
+			m.subs = append(m.subs[:i], m.subs[i+1:]...)
+			return
+		}
+	}
 }
 
 // findSubForIP returns the sub-allocator whose CIDR contains ip.

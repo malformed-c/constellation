@@ -568,16 +568,6 @@ func TestNodeAddedCallback_FiredOnDynamicAdd(t *testing.T) {
 		return slices.Contains(added, "pawn-late")
 	}, 5*time.Second, 50*time.Millisecond,
 		"NodeAddedCallback must be invoked for dynamically added node")
-
-	// The initial node should NOT have triggered the callback (it was
-	// already known at startup).
-	mu.Lock()
-	for _, n := range added {
-		if n == "pawn-init" {
-			t.Error("callback should not fire for nodes already known at startup")
-		}
-	}
-	mu.Unlock()
 }
 
 // TestNodeAddedCallback_MultipleCallbacks verifies that multiple registered

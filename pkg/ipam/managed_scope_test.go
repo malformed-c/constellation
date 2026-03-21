@@ -221,10 +221,107 @@ func TestManagedScope_AddCIDR_Dynamic(t *testing.T) {
 		t.Errorf("expected IP from 10.0.5.0/24, got %s", result.IP)
 	}
 
-	// Adding the same node again is a no-op.
+	// Adding the same node with the same CIDR is a no-op.
+	m.AddCIDR("pawn-new", parseCIDR(t, "10.0.5.0/24"))
+	if len(m.subs) != 2 {
+		t.Errorf("expected 2 sub-allocators after same-CIDR AddCIDR, got %d", len(m.subs))
+	}
+
+	// Adding the same node with a DIFFERENT CIDR replaces the sub-allocator.
 	m.AddCIDR("pawn-new", parseCIDR(t, "10.0.6.0/24"))
 	if len(m.subs) != 2 {
-		t.Errorf("expected 2 sub-allocators after duplicate AddCIDR, got %d", len(m.subs))
+		t.Errorf("expected 2 sub-allocators after CIDR update, got %d", len(m.subs))
+	}
+
+	// Allocate from the updated pool — should come from the new CIDR.
+	result2, err := m.AllocateNext("owner2", Pool("pawn-new"))
+	if err != nil {
+		t.Fatalf("AllocateNext from updated pool: %v", err)
+	}
+	if !parseCIDR(t, "10.0.6.0/24").Contains(result2.IP) {
+		t.Errorf("expected IP from updated 10.0.6.0/24, got %s", result2.IP)
+	}
+
+	// Old CIDR should no longer be allocatable via pool routing.
+	if m.subByNode["pawn-new"].allocCIDR.String() != "10.0.6.0/24" {
+		t.Errorf("expected sub-allocator CIDR to be 10.0.6.0/24, got %s",
+			m.subByNode["pawn-new"].allocCIDR.String())
+	}
+}
+
+func TestManagedScope_AddCIDR_UpdateExisting(t *testing.T) {
+	m := &managedScopeAllocator{
+		logger:      testLogger,
+		subByNode:   make(map[string]*subAllocator),
+		primaryNode: "primary",
+	}
+	m.addCIDR("primary", parseCIDR(t, "10.0.0.0/24"))
+	m.addCIDR("pawn-01", parseCIDR(t, "10.0.1.0/24"))
+
+	// Allocate an IP from pawn-01's original CIDR.
+	r1, err := m.AllocateNext("owner-1", Pool("pawn-01"))
+	if err != nil {
+		t.Fatalf("AllocateNext: %v", err)
+	}
+	if !parseCIDR(t, "10.0.1.0/24").Contains(r1.IP) {
+		t.Errorf("expected IP from 10.0.1.0/24, got %s", r1.IP)
+	}
+
+	// Simulate CiliumNode recreation with a new CIDR.
+	m.AddCIDR("pawn-01", parseCIDR(t, "10.0.5.0/24"))
+
+	// Sub-allocator count should stay the same.
+	if len(m.subs) != 2 {
+		t.Fatalf("expected 2 sub-allocators after CIDR update, got %d", len(m.subs))
+	}
+
+	// New allocations should come from the updated CIDR.
+	r2, err := m.AllocateNext("owner-2", Pool("pawn-01"))
+	if err != nil {
+		t.Fatalf("AllocateNext after update: %v", err)
+	}
+	if !parseCIDR(t, "10.0.5.0/24").Contains(r2.IP) {
+		t.Errorf("expected IP from updated 10.0.5.0/24, got %s", r2.IP)
+	}
+
+	// Old IP should fail to release (old CIDR no longer tracked).
+	err = m.Release(r1.IP, PoolDefault())
+	if err == nil {
+		t.Error("expected error releasing IP from old CIDR")
+	}
+
+	// Primary should be unaffected.
+	r3, err := m.AllocateNext("owner-3", Pool(""))
+	if err != nil {
+		t.Fatalf("AllocateNext primary: %v", err)
+	}
+	if !parseCIDR(t, "10.0.0.0/24").Contains(r3.IP) {
+		t.Errorf("expected IP from primary 10.0.0.0/24, got %s", r3.IP)
+	}
+}
+
+func TestManagedScope_AddCIDR_SameCIDR_NoOp(t *testing.T) {
+	m := &managedScopeAllocator{
+		logger:      testLogger,
+		subByNode:   make(map[string]*subAllocator),
+		primaryNode: "primary",
+	}
+	m.addCIDR("primary", parseCIDR(t, "10.0.0.0/24"))
+	m.addCIDR("pawn-01", parseCIDR(t, "10.0.1.0/24"))
+
+	// Allocate an IP.
+	r1, err := m.AllocateNext("owner", Pool("pawn-01"))
+	if err != nil {
+		t.Fatalf("AllocateNext: %v", err)
+	}
+
+	// AddCIDR with same CIDR should be a no-op — allocator state preserved.
+	m.AddCIDR("pawn-01", parseCIDR(t, "10.0.1.0/24"))
+
+	// The previously allocated IP should still be allocated (double-alloc fails).
+	_, err = m.Allocate(r1.IP, "other", Pool("pawn-01"))
+	if err == nil {
+		t.Error("expected error on double allocate — same-CIDR AddCIDR must preserve state")
 	}
 }
 
