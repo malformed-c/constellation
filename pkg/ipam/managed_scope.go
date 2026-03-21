@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/ipam/service/ipallocator"
+	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 )
 
 // managedScopeAllocator extends ClusterPool IPAM to support multiple managed
@@ -76,7 +76,9 @@ func newManagedScopeAllocator(
 		cn, err := cs.CiliumV2().CiliumNodes().Get(fetchCtx, name, metav1.GetOptions{})
 		if err != nil {
 			logger.Warn("Managed IPAM: could not fetch CiliumNode, skipping",
-				logfields.NodeName, name, logfields.Error, err)
+				logfields.NodeName, name,
+				logfields.Error, err,
+			)
 			continue
 		}
 
@@ -91,8 +93,9 @@ func newManagedScopeAllocator(
 	}
 
 	logger.Info("Managed IPAM: initialized",
-		"nodes", len(m.subs),
-		"totalCapacity", m.Capacity())
+		logfields.Nodes, len(m.subs),
+		logfields.TotalCapacity, m.Capacity(),
+	)
 
 	return m
 }

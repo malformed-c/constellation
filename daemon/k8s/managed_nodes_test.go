@@ -12,6 +12,7 @@ package k8s
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -20,13 +21,13 @@ import (
 	"github.com/cilium/hive/hivetest"
 	"github.com/cilium/statedb"
 	"github.com/stretchr/testify/require"
+	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/cilium/cilium/pkg/hive"
 	k8sTestUtils "github.com/cilium/cilium/pkg/k8s/client/testutils"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
-	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
@@ -564,12 +565,7 @@ func TestNodeAddedCallback_FiredOnDynamicAdd(t *testing.T) {
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		for _, n := range added {
-			if n == "pawn-late" {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(added, "pawn-late")
 	}, 5*time.Second, 50*time.Millisecond,
 		"NodeAddedCallback must be invoked for dynamically added node")
 

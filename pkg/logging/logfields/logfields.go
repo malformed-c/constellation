@@ -1873,4 +1873,8 @@ const (
 	AttachType = "attachType"
 
 	WithFrags = "withFrags"
+
+	ManagedNodes = "managedNodes"
+
+	TotalCapacity = "totalCapacity"
 )

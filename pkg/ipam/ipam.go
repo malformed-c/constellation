@@ -12,6 +12,7 @@ import (
 
 	"github.com/cilium/hive/job"
 	"github.com/cilium/statedb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	agentK8s "github.com/cilium/cilium/daemon/k8s"
 	"github.com/cilium/cilium/pkg/datapath/linux/sysctl"
@@ -25,7 +26,6 @@ import (
 	"github.com/cilium/cilium/pkg/node"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Family is the type describing all address families support by the IP
@@ -147,7 +147,8 @@ func (ipam *IPAM) ConfigureAllocator() {
 		if ipam.config.IPv4Enabled() {
 			if useManaged {
 				ipam.logger.Info("Managed IPAM: using per-pawn CiliumNode CIDRs",
-					"managedNodes", len(managedNames))
+					logfields.ManagedNodes, len(managedNames),
+				)
 				ipam.ipv4Allocator = newManagedScopeAllocator(
 					context.TODO(),
 					ipam.logger,
@@ -270,7 +271,9 @@ func (ipam *IPAM) addManagedNodeCIDR(nodeName string) {
 	cn, err := ipam.clientset.CiliumV2().CiliumNodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
 		ipam.logger.Warn("Managed IPAM: could not fetch CiliumNode for new node",
-			logfields.NodeName, nodeName, logfields.Error, err)
+			logfields.NodeName, nodeName,
+			logfields.Error, err,
+		)
 		return
 	}
 

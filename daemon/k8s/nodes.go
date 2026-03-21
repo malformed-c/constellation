@@ -29,9 +29,9 @@ import (
 
 	"github.com/cilium/cilium/pkg/k8s"
 	"github.com/cilium/cilium/pkg/k8s/client"
-	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/time"
 )
 
@@ -96,9 +96,9 @@ func discoverManagedNodes(ctx context.Context, cs client.Clientset, selector str
 	}
 
 	nodeWatcherLog.Info("Discovered managed nodes",
-		"selector", selector,
-		"count", len(names),
-		"nodes", names)
+		logfields.Selector, selector,
+		logfields.Count, len(names),
+		logfields.Node, names)
 	return names, nil
 }
 
@@ -235,12 +235,16 @@ func (nw *nodeWatcher) handleAdded(evt watch.Event) {
 	cfg := podReflectorConfig(nw.cs, nw.pods, name)
 	if err := k8s.RegisterReflector(nw.jg, nw.db, cfg); err != nil {
 		nw.logger.Error("Failed to register pod reflector for new node",
-			"node", name, logfields.Error, err)
+			logfields.Node, name,
+			logfields.Error, err,
+		)
 		return
 	}
 
 	nw.logger.Info("Discovered new managed node, started pod reflector",
-		"node", name, "total", len(names))
+		logfields.Node, name,
+		logfields.Total, len(names),
+	)
 
 	// Notify callbacks (e.g. IPAM) about the new node.
 	fireNodeAdded(name)
@@ -268,7 +272,9 @@ func (nw *nodeWatcher) handleDeleted(evt watch.Event) {
 	nodeTypes.SetManagedNames(names)
 
 	nw.logger.Info("Managed node removed",
-		"node", name, "remaining", len(names))
+		logfields.Node, name,
+		logfields.Remaining, len(names),
+	)
 }
 
 // knownNames returns a sorted slice of known node names. Must be called
