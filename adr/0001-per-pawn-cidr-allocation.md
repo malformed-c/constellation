@@ -1,6 +1,6 @@
 # ADR-0001: Per-pawn CIDR allocation for managed-nodes IPAM
 
-**Status:** Accepted  
+**Status:** Implemented
 **Date:** 2026-03-20  
 **Repository:** constellation
 
