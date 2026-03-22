@@ -23,14 +23,18 @@ import (
 	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/job"
 	"github.com/cilium/statedb"
+	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/watch"
 
+	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/k8s"
 	"github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/node/addressing"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/time"
 )
@@ -95,11 +99,80 @@ func discoverManagedNodes(ctx context.Context, cs client.Clientset, selector str
 		nodeTypes.SetManagedNames(names)
 	}
 
+	// Ensure CiliumNode resources exist for all managed nodes so the
+	// operator allocates per-node CIDRs before IPAM initialization.
+	localName := nodeTypes.GetName()
+	for _, name := range names {
+		if name == localName {
+			continue
+		}
+		ensureCiliumNodeFromAPI(ctx, cs, name)
+	}
+
 	nodeWatcherLog.Info("Discovered managed nodes",
 		logfields.Selector, selector,
 		logfields.Count, len(names),
 		logfields.Node, names)
 	return names, nil
+}
+
+// ensureCiliumNodeFromAPI creates a CiliumNode if it doesn't exist, fetching
+// the InternalIP from the k8s Node API.
+func ensureCiliumNodeFromAPI(ctx context.Context, cs client.Clientset, name string) {
+	// Check if CiliumNode already exists.
+	_, err := cs.CiliumV2().CiliumNodes().Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return
+	}
+
+	node, err := cs.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		nodeWatcherLog.Warn("Could not fetch Node for CiliumNode creation",
+			logfields.Node, name,
+			logfields.Error, err,
+		)
+		return
+	}
+
+	var nodeIP string
+	for _, addr := range node.Status.Addresses {
+		if addr.Type == corev1.NodeInternalIP {
+			nodeIP = addr.Address
+			break
+		}
+	}
+	if nodeIP == "" {
+		return
+	}
+
+	cn := &ciliumv2.CiliumNode{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Spec: ciliumv2.NodeSpec{
+			Addresses: []ciliumv2.NodeAddress{
+				{Type: addressing.NodeInternalIP, IP: nodeIP},
+			},
+			HealthAddressing: ciliumv2.HealthAddressingSpec{
+				IPv4: nodeIP,
+			},
+			Encryption: ciliumv2.EncryptionSpec{
+				Key: 0,
+			},
+		},
+	}
+
+	_, err = cs.CiliumV2().CiliumNodes().Create(ctx, cn, metav1.CreateOptions{})
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
+		nodeWatcherLog.Warn("Failed to create CiliumNode for managed node",
+			logfields.Node, name,
+			logfields.Error, err,
+		)
+		return
+	}
+	nodeWatcherLog.Info("Created CiliumNode for managed node",
+		logfields.Node, name,
+	)
 }
 
 // nodeWatcher watches Node objects matching a label selector and
@@ -246,6 +319,10 @@ func (nw *nodeWatcher) handleAdded(evt watch.Event) {
 	}
 	nw.mu.Unlock()
 
+	// Ensure a CiliumNode exists for this managed node so the operator
+	// allocates a per-node CIDR.
+	go nw.ensureCiliumNodeForManagedNode(name)
+
 	// Always notify callbacks — even for known nodes. On watch reconnect,
 	// Added events fire for all existing nodes. IPAM uses this to detect
 	// CiliumNode CIDR changes (e.g. after CiliumNode deletion/recreation).
@@ -287,4 +364,12 @@ func (nw *nodeWatcher) knownNames() []string {
 		names = append(names, n)
 	}
 	return names
+}
+
+// ensureCiliumNodeForManagedNode creates a CiliumNode resource for a managed
+// node if one doesn't already exist.
+func (nw *nodeWatcher) ensureCiliumNodeForManagedNode(name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ensureCiliumNodeFromAPI(ctx, nw.cs, name)
 }
