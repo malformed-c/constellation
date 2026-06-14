@@ -1947,4 +1947,8 @@ const (
 	ClaimUID = "claimUID"
 
 	PendingInitializers = "pendingInitializers"
+
+	ManagedNodes = "managedNodes"
+
+	TotalCapacity = "totalCapacity"
 )

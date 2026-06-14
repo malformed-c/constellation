@@ -101,6 +101,7 @@ type ArgsSpec struct {
 	K8S_POD_NAME      cniTypes.UnmarshallableString
 	K8S_POD_NAMESPACE cniTypes.UnmarshallableString
 	K8S_POD_UID       cniTypes.UnmarshallableString
+	K8S_POD_NODE_NAME cniTypes.UnmarshallableString
 }
 
 // Args contains arbitrary information a scheduler

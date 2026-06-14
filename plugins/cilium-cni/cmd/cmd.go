@@ -162,7 +162,14 @@ func getConfigFromCiliumAgent(client *client.Client) (*models.DaemonConfiguratio
 func allocateIPsWithCiliumAgent(logger *slog.Logger, client *client.Client, cniArgs *types.ArgsSpec) (*models.IPAMResponse, func(context.Context), error) {
 	podName := string(cniArgs.K8S_POD_NAMESPACE) + "/" + string(cniArgs.K8S_POD_NAME)
 
-	ipam, err := client.IPAMAllocate("", podName, "", true)
+	// When running under perigeos, K8S_POD_NODE_NAME identifies the pawn
+	// (virtual node) this pod is scheduled on. The managed IPAM allocator
+	// uses the node name as the pool key to route allocations to the
+	// correct per-pawn CIDR. Without this, all pods get IPs from the
+	// host node's default pool.
+	pool := string(cniArgs.K8S_POD_NODE_NAME)
+
+	ipam, err := client.IPAMAllocate("", podName, pool, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to allocate IP via local cilium agent: %w", err)
 	}

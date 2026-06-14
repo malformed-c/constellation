@@ -753,12 +753,20 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		ipv4PodCIDRs := n.GetIPv4AllocCIDRs()
 		ipv6PodCIDRs := n.GetIPv6AllocCIDRs()
 
+		// Managed nodes (perigeos pawns) run on the same host — skip the
+		// tunnel endpoint so BPF delivers locally instead of hairpinning
+		// through VXLAN.
+		cidrTunnelIP := nodeIP
+		if nodeTypes.IsManaged(n.Name) {
+			cidrTunnelIP = netip.Addr{}
+		}
+
 		mu := make([]ipcache.MU, 0, len(ipv4PodCIDRs)+len(ipv6PodCIDRs))
-		for entry := range m.podCIDREntries(n.Source, resource, m.cidrsToPrefixesCluster(&n, ipv4PodCIDRs...), nodeIP, n.EncryptionKey) {
+		for entry := range m.podCIDREntries(n.Source, resource, m.cidrsToPrefixesCluster(&n, ipv4PodCIDRs...), cidrTunnelIP, n.EncryptionKey) {
 			mu = append(mu, entry)
 			podCIDRsAdded = append(podCIDRsAdded, entry.Prefix.AsPrefix())
 		}
-		for entry := range m.podCIDREntries(n.Source, resource, m.cidrsToPrefixesCluster(&n, ipv6PodCIDRs...), nodeIP, n.EncryptionKey) {
+		for entry := range m.podCIDREntries(n.Source, resource, m.cidrsToPrefixesCluster(&n, ipv6PodCIDRs...), cidrTunnelIP, n.EncryptionKey) {
 			mu = append(mu, entry)
 			podCIDRsAdded = append(podCIDRsAdded, entry.Prefix.AsPrefix())
 		}
