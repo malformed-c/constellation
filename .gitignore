@@ -115,3 +115,7 @@ bpf/.cache
 # Files used for direnv
 .direnv
 .envrc
+
+# Constellation/agent tooling caches
+.serena/
+_output/

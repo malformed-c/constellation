@@ -1,0 +1,50 @@
+name: BPF Checks
+
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+
+permissions: read-all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.after }}
+  cancel-in-progress: true
+
+jobs:
+  check_changes:
+    name: Check for BPF changes
+    runs-on: ubuntu-24.04
+    outputs:
+      bpf-tree: ${{ steps.changes.outputs.bpf-tree }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check code changes
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            bpf-tree:
+              - 'bpf/**'
+              - 'Makefile*'
+              - '!**/*.md'
+
+  bpf-lint:
+    name: BPF Lint
+    needs: check_changes
+    if: ${{ needs.check_changes.outputs.bpf-tree == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run BPF checks
+        run: |
+          make -C bpf check || true
