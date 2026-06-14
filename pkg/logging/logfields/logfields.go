@@ -1945,4 +1945,8 @@ const (
 	PodUID = "podUID"
 
 	ClaimUID = "claimUID"
+
+	ManagedNodes = "managedNodes"
+
+	TotalCapacity = "totalCapacity"
 )

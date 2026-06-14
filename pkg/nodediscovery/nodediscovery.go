@@ -275,6 +275,7 @@ func (n *NodeDiscovery) updateCiliumNodeResource(ctx context.Context, ln *node.L
 				time.Sleep(backoffDuration)
 				continue
 			} else {
+				n.updateManagedCiliumInternalIPs(ctx, ln)
 				return
 			}
 		} else {
@@ -286,6 +287,7 @@ func (n *NodeDiscovery) updateCiliumNodeResource(ctx context.Context, ln *node.L
 				continue
 			} else {
 				n.logger.Info("Successfully created CiliumNode resource")
+				n.updateManagedCiliumInternalIPs(ctx, ln)
 				return
 			}
 		}

@@ -4,12 +4,14 @@
 package ipam
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/netip"
 
 	"github.com/cilium/hive/job"
 	"github.com/cilium/statedb"
+	"go4.org/netipx"
 
 	agentK8s "github.com/cilium/cilium/daemon/k8s"
 	"github.com/cilium/cilium/pkg/datapath/linux/sysctl"
@@ -17,9 +19,11 @@ import (
 	"github.com/cilium/cilium/pkg/ipam/podippool"
 	"github.com/cilium/cilium/pkg/ipmasq"
 	"github.com/cilium/cilium/pkg/k8s/client"
+	k8stables "github.com/cilium/cilium/pkg/k8s/tables"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/node"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
 )
 
@@ -129,6 +133,12 @@ func (ipam *IPAM) ConfigureAllocator() {
 			logfields.V6Prefix, ipam.nodeAddressing.IPv6().AllocationCIDR(),
 		)
 
+		// When managing multiple nodes (perigeos host sharding), merge all
+		// managed CiliumNode CIDRs into a single allocator so the agent
+		// can serve IPs for all pawns from one pool.
+		managedNames := nodeTypes.GetManagedNames()
+		useManaged := len(managedNames) > 1 && ipam.config.IPAMMode() == ipamOption.IPAMClusterPool
+
 		if ipam.config.IPv6Enabled() {
 			prefix := ipam.nodeAddressing.IPv6().AllocationCIDR()
 			if !prefix.IsValid() {
@@ -138,11 +148,29 @@ func (ipam *IPAM) ConfigureAllocator() {
 		}
 
 		if ipam.config.IPv4Enabled() {
-			prefix := ipam.nodeAddressing.IPv4().AllocationCIDR()
-			if !prefix.IsValid() {
-				logging.Fatal(ipam.logger, "Invalid IPv4 allocation CIDR")
+			if useManaged {
+				ipam.logger.Info("Managed IPAM: using per-pawn CiliumNode CIDRs",
+					logfields.ManagedNodes, len(managedNames),
+				)
+				ipam.ipv4Allocator = newManagedScopeAllocator(
+					context.TODO(),
+					ipam.logger,
+					ipam.clientset,
+					netipx.PrefixIPNet(ipam.nodeAddressing.IPv4().AllocationCIDR()),
+				)
+
+				// Register a callback so that late-arriving pawns get their
+				// CiliumNode CIDR added to the managed allocator dynamically.
+				k8stables.RegisterNodeAddedCallback(func(nodeName string) {
+					ipam.addManagedNodeCIDR(nodeName)
+				})
+			} else {
+				prefix := ipam.nodeAddressing.IPv4().AllocationCIDR()
+				if !prefix.IsValid() {
+					logging.Fatal(ipam.logger, "Invalid IPv4 allocation CIDR")
+				}
+				ipam.ipv4Allocator = newHostScopeAllocator(prefix)
 			}
-			ipam.ipv4Allocator = newHostScopeAllocator(prefix)
 		}
 	case ipamOption.IPAMMultiPool:
 		ipam.logger.Info("Initializing MultiPool IPAM")

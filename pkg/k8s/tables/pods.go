@@ -9,17 +9,10 @@ import (
 	"strings"
 
 	"github.com/cilium/hive/cell"
-	"github.com/cilium/hive/job"
 	"github.com/cilium/statedb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/duration"
 
-	"github.com/cilium/cilium/pkg/k8s"
-	"github.com/cilium/cilium/pkg/k8s/client"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
-	"github.com/cilium/cilium/pkg/k8s/utils"
-	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/time"
 )
 
@@ -81,25 +74,6 @@ var (
 	PodTableCell = cell.Provide(NewPodTableAndReflector)
 )
 
-// NewPodTableAndReflector returns the read-only Table[LocalPod] and registers
-// the k8s reflector. These are combined to ensure any dependency on Table[LocalPod]
-// will start after the reflector, ensuring that Start hooks can wait for the table
-// to initialize.
-func NewPodTableAndReflector(jg job.Group, db *statedb.DB, cs client.Clientset) (statedb.Table[LocalPod], error) {
-	pods, err := NewPodTable(db)
-	if err != nil {
-		return nil, err
-	}
-
-	if !cs.IsEnabled() {
-		return pods, nil
-	}
-
-	cfg := podReflectorConfig(cs, pods)
-	err = k8s.RegisterReflector(jg, db, cfg)
-	return pods, err
-}
-
 func PodByName(namespace, name string) statedb.Query[LocalPod] {
 	return PodNameIndex.Query(namespace + "/" + name)
 }
@@ -110,28 +84,4 @@ func NewPodTable(db *statedb.DB) (statedb.RWTable[LocalPod], error) {
 		"k8s-pods",
 		PodNameIndex,
 	)
-}
-
-func podReflectorConfig(cs client.Clientset, pods statedb.RWTable[LocalPod]) k8s.ReflectorConfig[LocalPod] {
-	lw := utils.ListerWatcherWithModifiers(
-		utils.ListerWatcherFromTyped(cs.Slim().CoreV1().Pods("")),
-		func(opts *metav1.ListOptions) {
-			opts.FieldSelector = fields.ParseSelectorOrDie("spec.nodeName=" + nodeTypes.GetName()).String()
-		})
-	return k8s.ReflectorConfig[LocalPod]{
-		Name:          reflectorName,
-		Table:         pods,
-		ListerWatcher: lw,
-		MetricScope:   "Pod",
-		Transform: func(_ statedb.ReadTxn, obj any) (LocalPod, bool) {
-			pod, ok := obj.(*slim_corev1.Pod)
-			if !ok {
-				return LocalPod{}, false
-			}
-			return LocalPod{
-				Pod:       pod,
-				UpdatedAt: time.Now(),
-			}, true
-		},
-	}
 }
