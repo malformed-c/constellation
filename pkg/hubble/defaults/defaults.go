@@ -30,7 +30,9 @@ const (
 	// SensitiveValueRedacted is the string constant that is used to redact
 	// sensitive information.
 	SensitiveValueRedacted = "HUBBLE_REDACTED"
+)
 
+var (
 	// SocketPath is the path to the UNIX domain socket exposing the Hubble API
 	// to clients locally.
 	SocketPath = ciliumDefaults.RuntimePath + "/hubble.sock"

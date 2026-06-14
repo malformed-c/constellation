@@ -16,25 +16,6 @@ const (
 	// DefaultIPv4PrefixLen is the length used to allocate container IPv4 addresses from.
 	DefaultIPv4PrefixLen = 16
 
-	// HostDevice is the name of the device that connects the cilium IP
-	// space with the host's networking model
-	HostDevice = "cilium_host"
-
-	// SecondHostDevice is the name of the second interface of the host veth pair.
-	SecondHostDevice = "cilium_net"
-
-	// IPIPv4Device is a device of type 'ipip', created by the agent.
-	IPIPv4Device = "cilium_ipip4"
-
-	// IPIPv6Device is a device of type 'ip6tnl', created by the agent.
-	IPIPv6Device = "cilium_ipip6"
-
-	// GeneveDevice is a device of type 'geneve', created by the agent.
-	GeneveDevice = "cilium_geneve"
-
-	// VxlanDevice is a device of type 'vxlan', created by the agent.
-	VxlanDevice = "cilium_vxlan"
-
 	// CiliumK8sAnnotationPrefix is the prefix key for the annotations used in kubernetes.
 	CiliumK8sAnnotationPrefix = "cilium.io/"
 

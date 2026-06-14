@@ -24,8 +24,6 @@ const (
 	PprofPort = 6062
 	// RetryTimeout is the duration to wait between reconnection attempts.
 	RetryTimeout = 30 * time.Second
-	// PeerTarget is the address of the peer service.
-	PeerTarget = "unix://" + hubbleDefaults.SocketPath
 	// PeerServiceName is the name of the peer service, should it exist.
 	PeerServiceName = "hubble-peer"
 
@@ -47,6 +45,9 @@ const (
 )
 
 var (
+	// PeerTarget is the address of the peer service.
+	PeerTarget = "unix://" + hubbleDefaults.SocketPath
+
 	// ListenAddress is the address on which the Hubble Relay server listens
 	// for incoming gRPC requests.
 	ListenAddress = fmt.Sprintf(":%d", hubbleDefaults.RelayPort)
