@@ -1900,4 +1900,8 @@ const (
 	CiliumDatapathPluginAttachmentPolicy = "datapathPluginAttachmentPolicy"
 
 	CiliumDatapathPluginVersion = "datapathPluginVersion"
+
+	ManagedNodes = "managedNodes"
+
+	TotalCapacity = "totalCapacity"
 )

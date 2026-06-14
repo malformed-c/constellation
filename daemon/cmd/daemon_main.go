@@ -90,6 +90,17 @@ const (
 func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags := cmd.Flags()
 
+	// --instance-id must be the first flag registered because it rewrites the
+	// default values of all path-related flags below. The actual rewrite is
+	// performed by PreScanInstanceID (called by NewAgentCmd before this
+	// function) so that the flag defaults already reflect the instance path
+	// when cobra registers them.
+	flags.String(option.InstanceID, "", "Unique identifier for this agent instance; namespaces runtime paths, BPF mounts and interface names so multiple agents can coexist on the same host (e.g. --instance-id=worker0)")
+	option.BindEnv(vp, option.InstanceID)
+
+	flags.String(option.ManagedNodesSelector, "", "Kubernetes label selector for nodes this agent manages. When set, the agent watches matching Node objects and manages their pods dynamically. Pass a bare label key (e.g. periapsis.io/host) to auto-append =<hostname>. Empty = standard single-node mode.")
+	option.BindEnv(vp, option.ManagedNodesSelector)
+
 	// Validators
 	option.Config.FixedIdentityMappingValidator = option.Validator(func(val string) error {
 		vals := strings.Split(val, "=")
@@ -1020,6 +1031,17 @@ func initEnv(logger *slog.Logger, vp *viper.Viper) {
 	// the path to an already mounted filesystem instead. This is
 	// useful if the daemon is being round inside a namespace and the
 	// BPF filesystem is mapped into the slave namespace.
+	// When running with an instance ID, point the BPF filesystem root at a
+	// per-instance subdirectory so that map pins from different agents never
+	// collide. This must happen before CheckOrMountFS reads or sets bpffsRoot.
+	if option.Config.InstanceID != "" {
+		bpf.SetBPFFSRoot(defaults.BPFFSRoot)
+	}
+
+	// Managed node names are now discovered dynamically by the node watcher
+	// inside NewPodTableAndReflector when --managed-nodes-selector is set.
+	// No static SetManagedNames call needed here.
+
 	bpf.CheckOrMountFS(logger, option.Config.BPFRoot)
 	cgroups.CheckOrMountCgrpFS(logger, option.Config.CGroupRoot)
 
