@@ -7,9 +7,9 @@ import (
 	daemon "github.com/cilium/cilium/pkg/defaults"
 )
 
+var SockPath = daemon.RuntimePath + "/health.sock"
+
 const (
-	// SockPath is the path to the UNIX domain socket exposing the API to clients locally
-	SockPath = daemon.RuntimePath + "/health.sock"
 
 	// SockPathEnv is the environment variable to overwrite SockPath
 	SockPathEnv = "CILIUM_HEALTH_SOCK"

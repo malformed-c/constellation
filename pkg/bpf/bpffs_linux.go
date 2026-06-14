@@ -44,6 +44,14 @@ func setBPFFSRoot(path string) {
 	bpffsRoot = path
 }
 
+// SetBPFFSRoot overrides the BPF filesystem root before any maps or pins are
+// accessed. It must be called before CheckOrMountFS (and before any BPFFSRoot,
+// CiliumPath, or TCGlobalsPath calls). Panics if called after the root has
+// been locked down by a read.
+func SetBPFFSRoot(path string) {
+	setBPFFSRoot(path)
+}
+
 func BPFFSRoot() string {
 	once.Do(lockDown)
 	return bpffsRoot
