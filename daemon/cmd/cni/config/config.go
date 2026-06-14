@@ -9,6 +9,7 @@ import (
 	"github.com/cilium/hive/cell"
 	"github.com/spf13/pflag"
 
+	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/option"
 )
 
@@ -22,7 +23,7 @@ var (
 		WriteCNIConfWhenReady: "",
 		ReadCNIConf:           "",
 		CNIChainingMode:       "none",
-		CNILogFile:            "/var/run/cilium/cilium-cni.log",
+		CNILogFile:            defaults.RuntimePath + "/cilium-cni.log",
 		CNIExclusive:          false,
 		CNIChainingTarget:     "",
 		CNIExternalRouting:    false,
