@@ -1,0 +1,59 @@
+name: Publish Helm Chart
+
+# Packages the Constellation-flavoured Cilium chart and pushes it to ghcr.io as
+# an OCI artifact, alongside the agent/operator images (build-images.yaml). The
+# chart's defaults already encode the Constellation datapath (routing-mode=tunnel,
+# kube-proxy-replacement, cluster-pool IPAM, managed-nodes-selector, ...), so
+#   helm install constellation oci://ghcr.io/<owner>/charts/cilium \
+#     --set k8sServiceHost=<api-vip> --set k8sServicePort=6443
+# brings up the agent without any extra values.
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-chart:
+    name: Package and push cilium chart
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Login to ghcr.io
+        run: helm registry login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Package and push chart
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          chart_dir=install/kubernetes/cilium
+
+          # On a version tag the chart + app version track the release (v1.2.3 ->
+          # 1.2.3); on main the chart keeps its own version from Chart.yaml (a dev
+          # build that overwrites the same OCI tag).
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            helm package "$chart_dir" --version "$version" --app-version "$version" --destination .
+          else
+            helm package "$chart_dir" --destination .
+          fi
+
+          pkg="$(ls cilium-*.tgz)"
+          echo "Pushing $pkg to oci://ghcr.io/${OWNER}/charts"
+          helm push "$pkg" "oci://ghcr.io/${OWNER}/charts"
