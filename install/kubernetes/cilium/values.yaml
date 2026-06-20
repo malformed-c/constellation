@@ -246,9 +246,10 @@ image:
   # type: [null, string]
   # @schema
   override: ~
-  repository: "quay.io/cilium/cilium"
-  tag: "v1.20.0-pre.3"
-  pullPolicy: "IfNotPresent"
+  # Constellation ships cilium-agent inside the constellation-agent image.
+  repository: "ghcr.io/malformed-c/constellation-agent"
+  tag: "main"
+  pullPolicy: "Always"
   # cilium-digest
   digest: ""
   useDigest: false
@@ -294,7 +295,10 @@ extraContainers: []
 # -- Additional initContainers added to the cilium Daemonset.
 extraInitContainers: []
 # -- Additional agent container arguments.
-extraArgs: []
+# Constellation shards the datapath across primary nodes: the agent only manages
+# nodes carrying this label (the perigeos pawn hosts), ignoring the rest.
+extraArgs:
+  - --managed-nodes-selector=periapsis.io/host
 # -- Additional agent container environment variables.
 extraEnv: []
 # -- Additional agent hostPath mounts.
@@ -704,7 +708,8 @@ bpf:
   # @schema
   # -- (bool) Enable native IP masquerade support in eBPF
   # @default -- `false`
-  masquerade: ~
+  # Constellation runs --enable-bpf-masquerade=true.
+  masquerade: true
   # @schema
   # type: [null, boolean]
   # @schema
@@ -1367,9 +1372,12 @@ enableNoServiceEndpointsRoutable: true
 # -- Configure socket LB
 socketLB:
   # -- Enable socket LB
-  enabled: false
+  # Constellation runs with kube-proxy replacement; socket LB handles ClusterIP.
+  enabled: true
   # -- Disable socket lb for non-root ns. This is used to enable Istio routing rules.
-  # hostNamespaceOnly: false
+  # Constellation runs --bpf-lb-sock-hostns-only=true so pod-netns connections take
+  # the per-endpoint datapath (host-namespace sockets still get socket LB).
+  hostNamespaceOnly: true
   # -- Enable terminating pod connections to deleted service backends.
   # terminatePodConnections: true
   # -- Enables tracing for socket-based load balancing.
@@ -2414,7 +2422,10 @@ readinessProbe:
 # @schema@
 # type: [string, boolean]
 # @schema@
-kubeProxyReplacement: "false"
+# Constellation replaces kube-proxy (--kube-proxy-replacement=true). Requires
+# k8sServiceHost/k8sServicePort to be set at install time (the API server the
+# agent dials, e.g. the LAN VIP) since there is no kube-proxy to reach it.
+kubeProxyReplacement: "true"
 # -- healthz server bind address for the kube-proxy replacement.
 # To enable set the value to '0.0.0.0:10256' for all ipv4
 # addresses and this '[::]:10256' for all ipv6 addresses.
@@ -3147,7 +3158,9 @@ underlayProtocol: ""
 #   - native
 #   - tunnel
 # @default -- `"tunnel"`
-routingMode: ""
+# Constellation runs --routing-mode=tunnel (VXLAN) so cross-host pod traffic
+# is encapsulated to the peer node's InternalIP.
+routingMode: "tunnel"
 # -- Configure VXLAN and Geneve tunnel port.
 # @default -- Port 8472 for VXLAN, Port 6081 for Geneve
 tunnelPort: 0
