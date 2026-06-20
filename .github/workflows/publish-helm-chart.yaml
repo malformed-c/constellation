@@ -1,10 +1,11 @@
 name: Publish Helm Chart
 
-# Packages the Constellation-flavoured Cilium chart and pushes it to ghcr.io as
-# an OCI artifact, alongside the agent/operator images (build-images.yaml). The
-# chart's defaults already encode the Constellation datapath (routing-mode=tunnel,
-# kube-proxy-replacement, cluster-pool IPAM, managed-nodes-selector, ...), so
-#   helm install constellation oci://ghcr.io/<owner>/charts/cilium \
+# Packages the Constellation chart (the Cilium-based eBPF datapath) and pushes it
+# to ghcr.io as an OCI artifact, alongside the agent/operator images
+# (build-images.yaml). The chart's defaults already encode the Constellation
+# datapath (routing-mode=tunnel, kube-proxy-replacement, cluster-pool IPAM,
+# managed-nodes-selector, ...), so
+#   helm install constellation oci://ghcr.io/<owner>/charts/constellation \
 #     --set k8sServiceHost=<api-vip> --set k8sServicePort=6443
 # brings up the agent without any extra values.
 
@@ -23,7 +24,7 @@ permissions:
 
 jobs:
   publish-chart:
-    name: Package and push cilium chart
+    name: Package and push constellation chart
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -54,6 +55,6 @@ jobs:
             helm package "$chart_dir" --destination .
           fi
 
-          pkg="$(ls cilium-*.tgz)"
+          pkg="$(ls constellation-*.tgz)"
           echo "Pushing $pkg to oci://ghcr.io/${OWNER}/charts"
           helm push "$pkg" "oci://ghcr.io/${OWNER}/charts"
