@@ -85,6 +85,7 @@ func newAllNodeManager(in struct {
 	DB                           *statedb.DB
 	Devices                      statedb.Table[*tables.Device]
 	WGConfig                     wgTypes.Config
+	LocalNodeStore               *node.LocalNodeStore
 	Writer                       *node.Writer
 	ClusterSizeDependantInterval node.ClusterSizeDependantIntervalFunc
 },
@@ -101,6 +102,7 @@ func newAllNodeManager(in struct {
 		in.DB,
 		in.Devices,
 		in.WGConfig,
+		in.LocalNodeStore,
 		in.Writer,
 		in.ClusterSizeDependantInterval,
 	)

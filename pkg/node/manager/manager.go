@@ -180,6 +180,12 @@ type manager struct {
 
 	// wireguard configuration used when calling endpointEncryptionKey.
 	wgConfig types.Config
+
+	localNodeStore *node.LocalNodeStore
+
+	// tunnelEndpointOverrides maps remote node name → IP to use as VXLAN
+	// tunnel endpoint instead of the node's primary InternalIP.
+	tunnelEndpointOverrides map[string]netip.Addr
 }
 
 // Subscribe subscribes the given node handler to node events.
@@ -276,9 +282,15 @@ func New(
 	db *statedb.DB,
 	devices statedb.Table[*tables.Device],
 	wgCfg types.Config,
+	localNodeStore *node.LocalNodeStore,
 	writer *node.Writer,
 	clusterSizeDependantInterval node.ClusterSizeDependantIntervalFunc,
 ) (*manager, error) {
+	tunnelOverrides, err := parseTunnelEndpointOverrides(c.TunnelEndpointOverrides)
+	if err != nil {
+		return nil, fmt.Errorf("parsing --%s: %w", option.TunnelEndpointOverrides, err)
+	}
+
 	m := &manager{
 		logger:                       logger,
 		nodes:                        map[nodeTypes.Identity]*nodeEntry{},
@@ -298,6 +310,8 @@ func New(
 		devices:                      devices,
 		prefixClusterMutatorFn:       func(node *nodeTypes.Node) []cmtypes.PrefixClusterOpts { return nil },
 		wgConfig:                     wgCfg,
+		localNodeStore:               localNodeStore,
+		tunnelEndpointOverrides:      tunnelOverrides,
 	}
 
 	if writer != nil {
@@ -680,6 +694,7 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		// event from the kvstore.
 		nodeIP, _ = netipx.FromStdIP(nIP)
 	}
+	nodeIP = lookupTunnelEndpointOverride(m.tunnelEndpointOverrides, n.Name, nodeIP)
 
 	resource := ipcacheTypes.NewResourceID(ipcacheTypes.ResourceKindNode, "", n.Name)
 	nodeLabels := m.nodeIdentityLabels(n)

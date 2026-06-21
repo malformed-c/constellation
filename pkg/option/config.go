@@ -274,6 +274,12 @@ const (
 	// "=<os.Hostname()>" automatically. Empty = standard single-node mode.
 	ManagedNodesSelector = "managed-nodes-selector"
 
+	// TunnelEndpointOverrides is a comma-separated list of node=ip pairs
+	// that override the VXLAN tunnel endpoint IP for specific remote nodes.
+	// Each entry makes the LOCAL agent use the given IP instead of the
+	// remote node's primary InternalIP as the tunnel endpoint.
+	TunnelEndpointOverrides = "tunnel-endpoint-overrides"
+
 	// LibDir enables the directory path to store runtime build environment
 	LibDir = "lib-dir"
 
@@ -1235,6 +1241,10 @@ type DaemonConfig struct {
 	// managed nodes dynamically. Populated from --managed-nodes-selector.
 	// Empty means single-node mode (standard Cilium behaviour).
 	ManagedNodesSelector string
+
+	// TunnelEndpointOverrides is the raw comma-separated "node=ip" string
+	// from --tunnel-endpoint-overrides. Parsed by the node manager at startup.
+	TunnelEndpointOverrides string
 
 	LibDir             string // Cilium library files directory
 	RunDir             string // Cilium runtime directory
@@ -2523,6 +2533,7 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 		}
 		c.ManagedNodesSelector = sel
 	}
+	c.TunnelEndpointOverrides = vp.GetString(TunnelEndpointOverrides)
 	c.LabelPrefixFile = vp.GetString(LabelPrefixFile)
 	c.Labels = vp.GetStringSlice(Labels)
 	c.LibDir = vp.GetString(LibDir)
