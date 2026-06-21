@@ -141,6 +141,12 @@ type IPCache struct {
 	// interface.
 	namedPorts namedPortMultiMapUpdater
 
+	// tunnelEndpointOverrides maps a remote node's original IP to the
+	// overridden tunnel endpoint IP. Used by the legacy Upsert path
+	// (CEP/pod watchers) so per-pod /32 ipcache entries honour the same
+	// override that the metadata-API path (node manager /20 CIDRs) uses.
+	tunnelEndpointOverrides map[string]string // original-IP-string → override-IP-string
+
 	// Configuration provides pointers towards other agent components that
 	// the IPCache relies upon at runtime.
 	*Configuration
@@ -192,6 +198,21 @@ func NewIPCache(c *Configuration) *IPCache {
 		Configuration:     c,
 	}
 	return ipc
+}
+
+// SetTunnelEndpointOverride registers a mapping so that legacy Upsert calls
+// (from CEP/pod watchers) that carry originalIP as the hostIP will substitute
+// it with overrideIP. This makes per-pod /32 ipcache entries honour the same
+// tunnel endpoint override that the metadata-API path uses for pod-CIDR entries.
+func (ipc *IPCache) SetTunnelEndpointOverride(originalIP, overrideIP net.IP) {
+	key := originalIP.String()
+	val := overrideIP.String()
+	ipc.mutex.Lock()
+	if ipc.tunnelEndpointOverrides == nil {
+		ipc.tunnelEndpointOverrides = make(map[string]string)
+	}
+	ipc.tunnelEndpointOverrides[key] = val
+	ipc.mutex.Unlock()
 }
 
 // Shutdown cleans up asynchronous routines associated with the IPCache.
@@ -309,6 +330,11 @@ func (ipc *IPCache) getEndpointFlagsRLocked(ip string) uint8 {
 func (ipc *IPCache) Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8sMetadata, newIdentity Identity) (namedPortsChanged bool, err error) {
 	ipc.mutex.Lock()
 	defer ipc.mutex.Unlock()
+	if hostIP != nil && ipc.tunnelEndpointOverrides != nil {
+		if override, ok := ipc.tunnelEndpointOverrides[hostIP.String()]; ok {
+			hostIP = net.ParseIP(override)
+		}
+	}
 	return ipc.upsertLocked(ip, hostIP, hostKey, k8sMeta, newIdentity, 0 /* endpointFlags unused in legacy */, false /* !force */, true /* fromLegacyAPI */)
 }
 

@@ -124,6 +124,8 @@ func (i *ipcacheMock) RemoveMetadataBatch(updates ...ipcache.MU) (revision uint6
 	return 0
 }
 
+func (i *ipcacheMock) SetTunnelEndpointOverride(originalIP, overrideIP net.IP) {}
+
 type ipsetMock struct {
 	v4 map[string]struct{}
 	v6 map[string]struct{}
