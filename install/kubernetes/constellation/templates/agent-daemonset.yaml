@@ -1,0 +1,166 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: constellation-agent
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: constellation-agent
+    {{- include "constellation.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: constellation-agent
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: constellation-agent
+        {{- include "constellation.labels" . | nindent 8 }}
+    spec:
+      hostNetwork: true
+      hostPID: true
+      serviceAccountName: constellation-agent
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        - operator: Exists
+      priorityClassName: system-node-critical
+      initContainers:
+        # Disable reverse-path filtering: Arch ships rp_filter=2, which makes the
+        # kernel drop BPF-redirected packets (they arrive on an unexpected path).
+        # Effective rp_filter is max(all, interface), so zero both default + wildcard.
+        - name: fix-sysctls
+          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              printf '%s\n' \
+                'net.ipv4.conf.default.rp_filter = 0' \
+                'net.ipv4.conf.*.rp_filter = 0' \
+                > /host-etc/sysctl.d/99-constellation-rp-filter.conf
+              sysctl --system >/dev/null 2>&1 || true
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-etc
+              mountPath: /host-etc
+        # Install the cilium-cni binary onto the host (perigeos writes the CNI
+        # conflist itself under /etc/cni/net.d/constellation).
+        - name: install-cni
+          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - "cp /opt/cni/bin/cilium-cni /host-cni-bin/.cilium-cni.tmp && mv /host-cni-bin/.cilium-cni.tmp /host-cni-bin/cilium-cni"
+          volumeMounts:
+            - name: cni-path
+              mountPath: /host-cni-bin
+      containers:
+        - name: agent
+          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          command: ["/usr/bin/cilium-agent"]
+          args:
+            - --managed-nodes-selector={{ .Values.managedNodesSelector }}
+            - --routing-mode=tunnel
+            - --kube-proxy-replacement=true
+            - --ipam=cluster-pool
+            - --enable-ipv6=false
+            - --enable-bpf-masquerade=true
+            - --bpf-lb-sock-hostns-only=true
+          env:
+            - name: KUBERNETES_SERVICE_HOST
+              value: {{ include "constellation.k8sServiceHost" . | quote }}
+            - name: KUBERNETES_SERVICE_PORT
+              value: {{ .Values.k8sServicePort | quote }}
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: PATH
+              value: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          securityContext:
+            privileged: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              host: 127.0.0.1
+              port: 9879
+              scheme: HTTP
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              host: 127.0.0.1
+              port: 9879
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: host-proc
+              mountPath: /proc
+            - name: host-sys
+              mountPath: /sys
+            - name: host-dev
+              mountPath: /dev
+            - name: cilium-run
+              mountPath: /var/run/cilium
+            - name: cni-path
+              mountPath: /opt/cni/bin
+            - name: cni-conf-dir
+              mountPath: /etc/cni/net.d/constellation
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: xtables-lock
+              mountPath: /run/xtables.lock
+            - name: host-netns
+              mountPath: /var/run/netns
+              mountPropagation: HostToContainer
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+      volumes:
+        - name: cilium-run
+          hostPath:
+            path: /var/run/cilium
+            type: DirectoryOrCreate
+        - name: cni-path
+          hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+        - name: cni-conf-dir
+          hostPath:
+            path: /etc/cni/net.d/constellation
+            type: DirectoryOrCreate
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+        - name: xtables-lock
+          hostPath:
+            path: /run/xtables.lock
+            type: FileOrCreate
+        - name: host-proc
+          hostPath:
+            path: /proc
+        - name: host-sys
+          hostPath:
+            path: /sys
+        - name: host-dev
+          hostPath:
+            path: /dev
+        - name: host-netns
+          hostPath:
+            path: /var/run/netns
+            type: DirectoryOrCreate
+        - name: host-etc
+          hostPath:
+            path: /etc
+            type: Directory
