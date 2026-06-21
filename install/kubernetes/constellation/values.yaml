@@ -1,0 +1,50 @@
+# Constellation Helm values. This chart is a clean, minimal templating of the
+# known-good bare-metal/perigeos deployment (agent DaemonSet + operator
+# Deployment + RBAC), NOT the upstream Cilium chart — it deliberately omits the
+# cloud-provider machinery (per-cloud operator variants, AWS-ENI hooks,
+# clustermesh certs, Hubble, Envoy, cgroup/bpf auto-mount + sysctlfix init
+# containers) that does not apply here and does not run under perigeos's nspawn
+# pod execution. The agent's only init containers are a one-shot rp_filter fix
+# and the cilium-cni binary install.
+
+namespace: kube-system
+
+# The API server the agent (kube-proxy replacement) and operator reach. REQUIRED.
+#   --set k8sServiceHost=192.168.50.1
+k8sServiceHost: ""
+k8sServicePort: "6443"
+
+# Agent runs only on perigeos primary hosts, and only MANAGES nodes carrying the
+# managedNodesSelector label (the datapath is sharded across pawn hosts).
+nodeSelector:
+  periapsis.io/primary: "true"
+managedNodesSelector: periapsis.io/host
+
+# cluster-pool IPAM (operator allocates per-node PodCIDRs from this pool).
+clusterPool:
+  cidr: 10.0.0.0/8
+  maskSize: 20
+
+agent:
+  image:
+    repository: ghcr.io/malformed-c/constellation-agent
+    tag: main
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+operator:
+  image:
+    repository: ghcr.io/malformed-c/constellation-operator
+    tag: main
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+  # The operator reaches the API server via the host k3s kubeconfig (it runs
+  # hostNetwork on a node where in-cluster config isn't usable).
+  kubeconfigDir: /etc/rancher/k3s
+  kubeconfigPath: /etc/rancher/k3s/k3s.yaml
