@@ -21,8 +21,12 @@ spec:
     spec:
       hostNetwork: true
       serviceAccountName: constellation-operator
+      {{- with .Values.operator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       tolerations:
-        - operator: Exists
+        {{- toYaml .Values.operator.tolerations | nindent 8 }}
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -44,6 +48,13 @@ spec:
             - --cluster-pool-ipv4-mask-size={{ .Values.clusterPool.maskSize }}
             - --enable-ipv6=false
             - --unmanaged-pod-watcher-interval=0
+            {{- if .Values.clusterName }}
+            - --cluster-name={{ .Values.clusterName }}
+            - --cluster-id={{ .Values.clusterID }}
+            {{- end }}
+            {{- with .Values.operator.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           volumeMounts:
             - name: kubeconfig
               mountPath: {{ .Values.operator.kubeconfigDir }}
