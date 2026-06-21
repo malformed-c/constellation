@@ -174,6 +174,10 @@ type manager struct {
 	wgConfig types.Config
 
 	localNodeStore *node.LocalNodeStore
+
+	// tunnelEndpointOverrides maps remote node name → IP to use as VXLAN
+	// tunnel endpoint instead of the node's primary InternalIP.
+	tunnelEndpointOverrides map[string]netip.Addr
 }
 
 // Subscribe subscribes the given node handler to node events.
@@ -277,26 +281,32 @@ func New(
 		ipsetFilter = func(*nodeTypes.Node) bool { return false }
 	}
 
+	tunnelOverrides, err := parseTunnelEndpointOverrides(c.TunnelEndpointOverrides)
+	if err != nil {
+		return nil, fmt.Errorf("parsing --%s: %w", option.TunnelEndpointOverrides, err)
+	}
+
 	m := &manager{
-		logger:                 logger,
-		nodes:                  map[nodeTypes.Identity]*nodeEntry{},
-		restoredNodes:          map[nodeTypes.Identity]*nodeTypes.Node{},
-		conf:                   c,
-		underlay:               tunnelConf.UnderlayProtocol(),
-		controllerManager:      controller.NewManager(),
-		nodeHandlers:           map[node.Handler]struct{}{},
-		ipcache:                ipCache,
-		ipsetMgr:               ipsetMgr,
-		ipsetInitializer:       ipsetMgr.NewInitializer(),
-		ipsetFilter:            ipsetFilter,
-		metrics:                nodeMetrics,
-		health:                 health,
-		jobGroup:               jobGroup,
-		db:                     db,
-		devices:                devices,
-		prefixClusterMutatorFn: func(node *nodeTypes.Node) []cmtypes.PrefixClusterOpts { return nil },
-		wgConfig:               wgCfg,
-		localNodeStore:         localNodeStore,
+		logger:                  logger,
+		nodes:                   map[nodeTypes.Identity]*nodeEntry{},
+		restoredNodes:           map[nodeTypes.Identity]*nodeTypes.Node{},
+		conf:                    c,
+		underlay:                tunnelConf.UnderlayProtocol(),
+		controllerManager:       controller.NewManager(),
+		nodeHandlers:            map[node.Handler]struct{}{},
+		ipcache:                 ipCache,
+		ipsetMgr:                ipsetMgr,
+		ipsetInitializer:        ipsetMgr.NewInitializer(),
+		ipsetFilter:             ipsetFilter,
+		metrics:                 nodeMetrics,
+		health:                  health,
+		jobGroup:                jobGroup,
+		db:                      db,
+		devices:                 devices,
+		prefixClusterMutatorFn:  func(node *nodeTypes.Node) []cmtypes.PrefixClusterOpts { return nil },
+		wgConfig:                wgCfg,
+		localNodeStore:          localNodeStore,
+		tunnelEndpointOverrides: tunnelOverrides,
 	}
 
 	return m, nil
@@ -690,6 +700,7 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		// event from the kvstore.
 		nodeIP, _ = netipx.FromStdIP(nIP)
 	}
+	nodeIP = lookupTunnelEndpointOverride(m.tunnelEndpointOverrides, n.Name, nodeIP)
 
 	resource := ipcacheTypes.NewResourceID(ipcacheTypes.ResourceKindNode, "", n.Name)
 	nodeLabels := m.nodeIdentityLabels(n)
