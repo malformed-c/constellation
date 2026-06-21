@@ -26,7 +26,7 @@ spec:
       nodeSelector:
         {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations:
-        - operator: Exists
+        {{- toYaml .Values.agent.tolerations | nindent 8 }}
       priorityClassName: system-node-critical
       initContainers:
         # Disable reverse-path filtering: Arch ships rp_filter=2, which makes the
@@ -67,13 +67,25 @@ spec:
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           command: ["/usr/bin/cilium-agent"]
           args:
-            - --managed-nodes-selector={{ .Values.managedNodesSelector }}
             - --routing-mode=tunnel
             - --kube-proxy-replacement=true
             - --ipam=cluster-pool
             - --enable-ipv6=false
             - --enable-bpf-masquerade=true
             - --bpf-lb-sock-hostns-only=true
+            {{- if .Values.managedNodesSelector }}
+            - --managed-nodes-selector={{ .Values.managedNodesSelector }}
+            {{- end }}
+            {{- if gt (int .Values.mtu) 0 }}
+            - --mtu={{ .Values.mtu }}
+            {{- end }}
+            {{- if .Values.clusterName }}
+            - --cluster-name={{ .Values.clusterName }}
+            - --cluster-id={{ .Values.clusterID }}
+            {{- end }}
+            {{- with .Values.agent.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           env:
             - name: KUBERNETES_SERVICE_HOST
               value: {{ include "constellation.k8sServiceHost" . | quote }}

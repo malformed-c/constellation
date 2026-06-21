@@ -1,11 +1,15 @@
 # Constellation Helm values. This chart is a clean, minimal templating of the
 # known-good bare-metal/perigeos deployment (agent DaemonSet + operator
-# Deployment + RBAC), NOT the upstream Cilium chart — it deliberately omits the
-# cloud-provider machinery (per-cloud operator variants, AWS-ENI hooks,
-# clustermesh certs, Hubble, Envoy, cgroup/bpf auto-mount + sysctlfix init
-# containers) that does not apply here and does not run under perigeos's nspawn
-# pod execution. The agent's only init containers are a one-shot rp_filter fix
-# and the cilium-cni binary install.
+# Deployment + RBAC + ServiceAccounts), NOT the upstream Cilium chart — it
+# deliberately omits the cloud-provider machinery (per-cloud operator variants,
+# AWS-ENI hooks, clustermesh certs, Hubble relay/UI, Envoy, cgroup/bpf
+# auto-mount + sysctlfix init containers) that does not apply here and does not
+# run under perigeos's nspawn pod execution. The agent's only init containers
+# are the one-shot rp_filter fix and the cilium-cni binary install.
+#
+# Datapath features beyond the always-on base (WireGuard encryption, netkit,
+# BBR, PMTU discovery, L2 announcements, ...) are added via agent.extraArgs /
+# operator.extraArgs — see examples/inventx-values.yaml for a full overlay.
 
 namespace: kube-system
 
@@ -14,11 +18,18 @@ namespace: kube-system
 k8sServiceHost: ""
 k8sServicePort: "6443"
 
-# Agent runs only on perigeos primary hosts, and only MANAGES nodes carrying the
-# managedNodesSelector label (the datapath is sharded across pawn hosts).
+# Agent runs on nodes matching nodeSelector, and (for the Constellation fork's
+# sharded datapath) only MANAGES nodes carrying managedNodesSelector. Set
+# managedNodesSelector to "" for a stock single-datapath cluster (no sharding).
 nodeSelector:
   periapsis.io/primary: "true"
 managedNodesSelector: periapsis.io/host
+
+# Optional cilium cluster identity (clustermesh). 0 / "" = unset.
+clusterName: ""
+clusterID: 0
+# Overwrite the auto-detected MTU. 0 = auto.
+mtu: 0
 
 # cluster-pool IPAM (operator allocates per-node PodCIDRs from this pool).
 clusterPool:
@@ -34,6 +45,12 @@ agent:
     requests:
       cpu: 100m
       memory: 256Mi
+  tolerations:
+    - operator: Exists
+  # Extra cilium-agent flags, appended after the always-on base set
+  # (--routing-mode=tunnel, --kube-proxy-replacement=true, --ipam=cluster-pool,
+  # --enable-ipv6=false, --enable-bpf-masquerade=true, --bpf-lb-sock-hostns-only=true).
+  extraArgs: []
 
 operator:
   image:
@@ -48,3 +65,9 @@ operator:
   # hostNetwork on a node where in-cluster config isn't usable).
   kubeconfigDir: /etc/rancher/k3s
   kubeconfigPath: /etc/rancher/k3s/k3s.yaml
+  # Scheduling. Default: no hard nodeSelector, prefer the control-plane via
+  # affinity, tolerate everything. Override nodeSelector to pin it.
+  nodeSelector: {}
+  tolerations:
+    - operator: Exists
+  extraArgs: []
