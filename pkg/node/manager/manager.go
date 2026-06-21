@@ -290,6 +290,9 @@ func New(
 	if err != nil {
 		return nil, fmt.Errorf("parsing --%s: %w", option.TunnelEndpointOverrides, err)
 	}
+	if len(tunnelOverrides) > 0 {
+		logger.Info("Parsed tunnel endpoint overrides", "overrides", tunnelOverrides)
+	}
 
 	m := &manager{
 		logger:                       logger,
@@ -694,7 +697,23 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		// event from the kvstore.
 		nodeIP, _ = netipx.FromStdIP(nIP)
 	}
-	nodeIP = lookupTunnelEndpointOverride(m.tunnelEndpointOverrides, n.Name, nodeIP)
+	if overridden := lookupTunnelEndpointOverride(m.tunnelEndpointOverrides, n.Name, nodeIP); overridden != nodeIP {
+		m.logger.Info("Tunnel endpoint override applied",
+			logfields.NodeName, n.Name,
+			"original", nodeIP,
+			"override", overridden,
+			"reachable", true,
+		)
+		nodeIP = overridden
+	} else if m.tunnelEndpointOverrides != nil {
+		if candidate, ok := m.tunnelEndpointOverrides[n.Name]; ok {
+			m.logger.Info("Tunnel endpoint override skipped (not locally reachable)",
+				logfields.NodeName, n.Name,
+				"candidate", candidate,
+				"fallback", nodeIP,
+			)
+		}
+	}
 
 	resource := ipcacheTypes.NewResourceID(ipcacheTypes.ResourceKindNode, "", n.Name)
 	nodeLabels := m.nodeIdentityLabels(n)
