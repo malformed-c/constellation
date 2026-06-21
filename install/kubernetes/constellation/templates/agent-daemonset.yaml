@@ -79,6 +79,9 @@ spec:
             {{- if gt (int .Values.mtu) 0 }}
             - --mtu={{ .Values.mtu }}
             {{- end }}
+            {{- if .Values.tunnelEndpointOverrides }}
+            - --tunnel-endpoint-overrides={{ .Values.tunnelEndpointOverrides }}
+            {{- end }}
             {{- if .Values.clusterName }}
             - --cluster-name={{ .Values.clusterName }}
             - --cluster-id={{ .Values.clusterID }}
