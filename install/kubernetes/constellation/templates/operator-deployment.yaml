@@ -48,6 +48,13 @@ spec:
             - --cluster-pool-ipv4-mask-size={{ .Values.clusterPool.maskSize }}
             - --enable-ipv6=false
             - --unmanaged-pod-watcher-interval=0
+            # Clear the node.cilium.io/agent-not-ready taint once the agent has
+            # registered its CiliumNode, so workloads can schedule. The agent
+            # re-adds this taint on every restart; without the operator removing
+            # it the node stays unschedulable after an agent restart.
+            - --remove-cilium-node-taints=true
+            - --set-cilium-node-taints=true
+            - --set-cilium-is-up-condition=true
             {{- if .Values.clusterName }}
             - --cluster-name={{ .Values.clusterName }}
             - --cluster-id={{ .Values.clusterID }}
