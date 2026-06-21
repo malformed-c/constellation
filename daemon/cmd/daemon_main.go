@@ -102,6 +102,9 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags.String(option.ManagedNodesSelector, "", "Kubernetes label selector for nodes this agent manages. When set, the agent watches matching Node objects and manages their pods dynamically. Pass a bare label key (e.g. periapsis.io/host) to auto-append =<hostname>. Empty = standard single-node mode.")
 	option.BindEnv(vp, option.ManagedNodesSelector)
 
+	flags.String(option.TunnelEndpointOverrides, "", `Per-remote-node tunnel endpoint overrides. Comma-separated "node=ip" pairs, e.g. "engix99=192.168.50.1". This agent uses the given IP as the VXLAN tunnel endpoint for the named remote node instead of its primary InternalIP.`)
+	option.BindEnv(vp, option.TunnelEndpointOverrides)
+
 	// Validators
 	option.Config.FixedIdentityMappingValidator = option.Validator(func(val string) error {
 		vals := strings.Split(val, "=")
