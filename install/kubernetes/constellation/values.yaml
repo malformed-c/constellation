@@ -31,6 +31,17 @@ clusterID: 0
 # Overwrite the auto-detected MTU. 0 = auto.
 mtu: 0
 
+# Per-node tunnel-endpoint overrides: comma-separated nodename=ipv4 pairs. When
+# THIS node has L2 reachability to the given IP (it falls in a locally-connected
+# subnet), the agent uses that IP as the VXLAN tunnel endpoint for the named
+# remote node instead of the node's advertised InternalIP. A per-node
+# L2-reachability guard (isLocallyReachable) makes this safe to set cluster-wide:
+# a node that can't reach the IP silently keeps the default endpoint. Pins a
+# dual-homed pair onto their fast shared link, e.g. engifire->engix99 over
+# ethernet 192.168.50.1 instead of the slower shared-wifi InternalIP.
+#   tunnelEndpointOverrides: "engix99=192.168.50.1"
+tunnelEndpointOverrides: ""
+
 # cluster-pool IPAM (operator allocates per-node PodCIDRs from this pool).
 clusterPool:
   cidr: 10.0.0.0/8
