@@ -1,0 +1,69 @@
+# InventX overlay for the Constellation chart — ported from the inventx Terraform
+# (plans/cilium-ix-values.yaml.tmpl, upstream Cilium chart). Maps each inventx
+# Cilium setting to a verified cilium-agent flag (checked against the v1.20 agent
+# binary). The base chart already sets routing-mode=tunnel, kube-proxy-replacement,
+# ipam=cluster-pool, enable-ipv6=false, enable-bpf-masquerade, bpf-lb-sock-hostns-only.
+#
+#   helm install constellation oci://ghcr.io/malformed-c/charts/constellation \
+#     -f examples/inventx-values.yaml --set k8sServiceHost=<api_server_ip>
+#
+# NOT ported: Hubble relay + UI (this minimal chart has no Hubble templates — they
+# need their own Deployments/Services/certs). envoy was disabled in inventx too,
+# which matches the base. externalIPs is implied by kube-proxy-replacement in v1.20
+# (no --enable-external-ips flag), so it needs no override.
+
+# inventx is a stock single-datapath cluster (not the sharded Constellation fork),
+# so disable the managed-nodes shard selector and select by the inventx node label.
+managedNodesSelector: ""
+nodeSelector:
+  cni: "cilium"
+
+clusterName: inventx
+clusterID: 1
+mtu: 1360
+
+# inventx pod CIDR pool.
+clusterPool:
+  cidr: 10.42.0.0/16
+  maskSize: 24
+
+agent:
+  extraArgs:
+    # encryption (WireGuard) — nodes interact over the public internet.
+    - --enable-wireguard=true
+    - --encrypt-node=true
+    # overlay + native-routing CIDR.
+    - --tunnel-protocol=vxlan
+    - --ipv4-native-routing-cidr=10.42.0.0/16
+    # datapath: netkit, no host legacy routing.
+    - --datapath-mode=netkit
+    - --enable-host-legacy-routing=false
+    # bpf map sizing + distributed LRU + clock probe.
+    - --bpf-map-dynamic-size-ratio=0.15
+    - --bpf-distributed-lru=true
+    - --enable-bpf-clock-probe=true
+    # bandwidth manager + BBR (host-ns only).
+    - --enable-bandwidth-manager=true
+    - --enable-bbr=true
+    - --enable-bbr-hostns-only=true
+    # path MTU discovery + L2 announcements.
+    - --enable-pmtu-discovery=true
+    - --enable-l2-announcements=true
+    # devices: the external WireGuard interface.
+    - --devices=wg-external
+    - --force-device-detection=true
+
+# inventx schedules the operator on the control-plane node.
+operator:
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: "true"
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node.kubernetes.io/not-ready
+      operator: Exists
+      effect: NoSchedule
+    - key: node.kubernetes.io/unreachable
+      operator: Exists
+      effect: NoSchedule
