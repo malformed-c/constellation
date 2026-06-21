@@ -83,6 +83,7 @@ type IPCache interface {
 	RemoveMetadata(prefix cmtypes.PrefixCluster, resource ipcacheTypes.ResourceID, aux ...ipcache.IPMetadata)
 	UpsertMetadataBatch(updates ...ipcache.MU) (revision uint64)
 	RemoveMetadataBatch(updates ...ipcache.MU) (revision uint64)
+	SetTunnelEndpointOverride(originalIP, overrideIP net.IP)
 }
 
 // IPSetFilterFn is a function allowing to optionally filter out the insertion
@@ -709,6 +710,10 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 			"original", nodeIP,
 			"override", overridden,
 			"reachable", true,
+		)
+		m.ipcache.SetTunnelEndpointOverride(
+			nodeIP.AsSlice(),
+			overridden.AsSlice(),
 		)
 		nodeIP = overridden
 	} else if m.tunnelEndpointOverrides != nil {
