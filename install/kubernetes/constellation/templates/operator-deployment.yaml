@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: constellation-operator
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: constellation-operator
+    {{- include "constellation.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: constellation-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: constellation-operator
+        {{- include "constellation.labels" . | nindent 8 }}
+    spec:
+      hostNetwork: true
+      serviceAccountName: constellation-operator
+      tolerations:
+        - operator: Exists
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
+      priorityClassName: system-cluster-critical
+      containers:
+        - name: operator
+          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
+          command: ["/usr/bin/cilium-operator"]
+          args:
+            - --k8s-kubeconfig-path={{ .Values.operator.kubeconfigPath }}
+            - --ipam=cluster-pool
+            - --cluster-pool-ipv4-cidr={{ .Values.clusterPool.cidr }}
+            - --cluster-pool-ipv4-mask-size={{ .Values.clusterPool.maskSize }}
+            - --enable-ipv6=false
+            - --unmanaged-pod-watcher-interval=0
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: {{ .Values.operator.kubeconfigDir }}
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              host: localhost
+              path: /healthz
+              port: 9234
+              scheme: HTTP
+            initialDelaySeconds: 120
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+      volumes:
+        - name: kubeconfig
+          hostPath:
+            path: {{ .Values.operator.kubeconfigDir }}
+            type: Directory

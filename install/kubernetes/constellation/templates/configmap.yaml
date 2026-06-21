@@ -1,0 +1,10 @@
+# Reserved for future operator-managed configuration. The agent discovers
+# managed nodes dynamically via --managed-nodes-selector, so this is empty today.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: constellation-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "constellation.labels" . | nindent 4 }}
+data: {}
