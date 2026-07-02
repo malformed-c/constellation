@@ -47,7 +47,12 @@ static __always_inline int
 constellation_stz_ingress4(struct __ctx_buff *ctx, int l3_off,
 			   const struct iphdr *ip4)
 {
+	/* Cache all ip4 field reads BEFORE any BPF helper calls —
+	 * map_lookup_elem invalidates direct packet data pointers.
+	 */
 	__be32 daddr = ip4->daddr;
+	__u8 protocol = ip4->protocol;
+	int l4_off = l3_off + ipv4_hdrlen(ip4);
 
 	__u64 *ts = map_lookup_elem(&constellation_stz_flows, &daddr);
 	if (ts)
@@ -56,10 +61,9 @@ constellation_stz_ingress4(struct __ctx_buff *ctx, int l3_off,
 	if (!map_lookup_elem(&constellation_stz_triggers, &daddr))
 		return CTX_ACT_OK;
 
-	if (ip4->protocol != IPPROTO_TCP)
+	if (protocol != IPPROTO_TCP)
 		return CTX_ACT_OK;
 
-	int l4_off = l3_off + ipv4_hdrlen(ip4);
 	union tcp_flags flags = {};
 
 	if (l4_load_tcp_flags(ctx, l4_off, &flags) < 0)
