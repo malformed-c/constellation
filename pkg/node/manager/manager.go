@@ -286,7 +286,7 @@ func New(
 		return nil, fmt.Errorf("parsing --%s: %w", option.TunnelEndpointOverrides, err)
 	}
 	if len(tunnelOverrides) > 0 {
-		logger.Info("Parsed tunnel endpoint overrides", "overrides", tunnelOverrides)
+		logger.Info("Parsed tunnel endpoint overrides", logOverrides, tunnelOverrides)
 	}
 
 	m := &manager{
@@ -706,9 +706,9 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 	if overridden := lookupTunnelEndpointOverride(m.tunnelEndpointOverrides, n.Name, nodeIP); overridden != nodeIP {
 		m.logger.Info("Tunnel endpoint override applied",
 			logfields.NodeName, n.Name,
-			"original", nodeIP,
-			"override", overridden,
-			"reachable", true,
+			logOriginal, nodeIP,
+			logOverride, overridden,
+			logReachable, true,
 		)
 		m.ipcache.SetTunnelEndpointOverride(
 			nodeIP.AsSlice(),
@@ -719,8 +719,8 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		if candidate, ok := m.tunnelEndpointOverrides[n.Name]; ok {
 			m.logger.Info("Tunnel endpoint override skipped (not locally reachable)",
 				logfields.NodeName, n.Name,
-				"candidate", candidate,
-				"fallback", nodeIP,
+				logCandidate, candidate,
+				logFallback, nodeIP,
 			)
 		}
 	}
