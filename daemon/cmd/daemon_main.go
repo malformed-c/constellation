@@ -104,6 +104,9 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags.String(option.TunnelEndpointOverrides, "", `Per-remote-node tunnel endpoint overrides. Comma-separated "node=ip" pairs, e.g. "engix99=192.168.50.1". This agent uses the given IP as the VXLAN tunnel endpoint for the named remote node instead of its primary InternalIP.`)
 	option.BindEnv(vp, option.TunnelEndpointOverrides)
 
+	flags.Bool(option.EnableScaleToZeroDatapath, false, "Enable the BPF scale-to-zero datapath (SYN trap + flow tracking maps for idle pod waking by the periapsis agent).")
+	option.BindEnv(vp, option.EnableScaleToZeroDatapath)
+
 	// Validators
 	option.Config.FixedIdentityMappingValidator = option.Validator(func(val string) error {
 		vals := strings.Split(val, "=")
