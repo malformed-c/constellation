@@ -75,5 +75,5 @@ constellation_stz_ingress4(struct __ctx_buff *ctx, int l3_off,
 		ringbuf_submit(evt, 0);
 	}
 
-	return CTX_ACT_SHOT;
+	return CTX_ACT_DROP;
 }
