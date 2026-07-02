@@ -42,6 +42,11 @@ mtu: 0
 #   tunnelEndpointOverrides: "engix99=192.168.50.1"
 tunnelEndpointOverrides: ""
 
+# Enable the BPF scale-to-zero datapath (SYN trap + flow tracking maps).
+# When true, the agent compiles constellation_stz maps into the BPF programs
+# so the periapsis agent can detect idle pods and trap wake SYNs.
+enableScaleToZeroDatapath: false
+
 # cluster-pool IPAM (operator allocates per-node PodCIDRs from this pool).
 clusterPool:
   cidr: 10.0.0.0/8

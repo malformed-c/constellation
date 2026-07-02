@@ -82,6 +82,9 @@ spec:
             {{- if .Values.tunnelEndpointOverrides }}
             - --tunnel-endpoint-overrides={{ .Values.tunnelEndpointOverrides }}
             {{- end }}
+            {{- if .Values.enableScaleToZeroDatapath }}
+            - --enable-scale-to-zero-datapath=true
+            {{- end }}
             {{- if .Values.clusterName }}
             - --cluster-name={{ .Values.clusterName }}
             - --cluster-id={{ .Values.clusterID }}
