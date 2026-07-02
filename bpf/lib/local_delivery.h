@@ -254,7 +254,7 @@ static __always_inline int ipv4_local_delivery(struct __ctx_buff *ctx, int l3_of
 		return ret;
 
 #ifdef CONSTELLATION_ENABLE_STZ
-	ret = constellation_stz_ingress4(ctx, l3_off, ip4);
+	ret = constellation_stz_ingress4(ctx, l3_off);
 	if (ret != CTX_ACT_OK)
 		return ret;
 #endif

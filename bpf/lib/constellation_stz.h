@@ -44,15 +44,20 @@ struct {
 } constellation_stz_events __section_maps_btf;
 
 static __always_inline int
-constellation_stz_ingress4(struct __ctx_buff *ctx, int l3_off,
-			   const struct iphdr *ip4)
+constellation_stz_ingress4(struct __ctx_buff *ctx, int l3_off)
 {
-	/* Cache all ip4 field reads BEFORE any BPF helper calls —
-	 * map_lookup_elem invalidates direct packet data pointers.
+	/* Read all packet fields via ctx_load_bytes — never touch a direct
+	 * packet pointer.  ipv4_l3() (MAC rewrite) runs before this hook and
+	 * its skb_store_bytes call invalidates any ip4 pointer the caller held.
+	 * ctx_load_bytes is a helper the verifier trusts in every context.
 	 */
-	__be32 daddr = ip4->daddr;
-	__u8 protocol = ip4->protocol;
-	int l4_off = l3_off + ipv4_hdrlen(ip4);
+	__be32 daddr;
+	__u8 protocol;
+	__u8 ihl_byte;
+
+	if (ctx_load_bytes(ctx, l3_off + offsetof(struct iphdr, daddr),
+			   &daddr, sizeof(daddr)) < 0)
+		return CTX_ACT_OK;
 
 	__u64 *ts = map_lookup_elem(&constellation_stz_flows, &daddr);
 	if (ts)
@@ -61,9 +66,17 @@ constellation_stz_ingress4(struct __ctx_buff *ctx, int l3_off,
 	if (!map_lookup_elem(&constellation_stz_triggers, &daddr))
 		return CTX_ACT_OK;
 
+	if (ctx_load_bytes(ctx, l3_off + offsetof(struct iphdr, protocol),
+			   &protocol, sizeof(protocol)) < 0)
+		return CTX_ACT_OK;
+
 	if (protocol != IPPROTO_TCP)
 		return CTX_ACT_OK;
 
+	if (ctx_load_bytes(ctx, l3_off, &ihl_byte, sizeof(ihl_byte)) < 0)
+		return CTX_ACT_OK;
+
+	int l4_off = l3_off + ((ihl_byte & 0x0f) << 2);
 	union tcp_flags flags = {};
 
 	if (l4_load_tcp_flags(ctx, l4_off, &flags) < 0)
