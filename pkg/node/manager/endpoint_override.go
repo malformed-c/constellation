@@ -10,6 +10,15 @@ import (
 	"strings"
 )
 
+const (
+	logOverrides = "overrides"
+	logOriginal  = "original"
+	logOverride  = "override"
+	logReachable = "reachable"
+	logCandidate = "candidate"
+	logFallback  = "fallback"
+)
+
 // parseTunnelEndpointOverrides parses a comma-separated "node=ip" string into
 // a map keyed by remote node name. Returns nil for an empty input.
 func parseTunnelEndpointOverrides(raw string) (map[string]netip.Addr, error) {
