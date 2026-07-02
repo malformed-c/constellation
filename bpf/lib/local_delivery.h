@@ -11,6 +11,10 @@
 #include "proxy.h"
 #include "token_bucket.h"
 
+#ifdef CONSTELLATION_ENABLE_STZ
+#include "constellation_stz.h"
+#endif
+
 DECLARE_CONFIG(bool, enable_netkit, "Use netkit devices for pods")
 
 /* Global map to jump into policy enforcement of sending endpoint */
@@ -251,6 +255,12 @@ static __always_inline int ipv4_local_delivery(struct __ctx_buff *ctx, int l3_of
 	ret = ipv4_l3(ctx, l3_off, (__u8 *)&router_mac, (__u8 *)&lxc_mac, ip4);
 	if (ret != CTX_ACT_OK)
 		return ret;
+
+#ifdef CONSTELLATION_ENABLE_STZ
+	ret = constellation_stz_ingress4(ctx, l3_off, ip4);
+	if (ret != CTX_ACT_OK)
+		return ret;
+#endif
 
 	return local_delivery(ctx, seclabel, magic, ep, direction, from_host,
 			      from_tunnel, cluster_id);

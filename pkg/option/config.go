@@ -280,6 +280,10 @@ const (
 	// remote node's primary InternalIP as the tunnel endpoint.
 	TunnelEndpointOverrides = "tunnel-endpoint-overrides"
 
+	// EnableScaleToZeroDatapath enables the BPF scale-to-zero datapath
+	// (SYN trap + flow tracking maps) for idle pod waking.
+	EnableScaleToZeroDatapath = "enable-scale-to-zero-datapath"
+
 	// LibDir enables the directory path to store runtime build environment
 	LibDir = "lib-dir"
 
@@ -1245,6 +1249,8 @@ type DaemonConfig struct {
 	// TunnelEndpointOverrides is the raw comma-separated "node=ip" string
 	// from --tunnel-endpoint-overrides. Parsed by the node manager at startup.
 	TunnelEndpointOverrides string
+
+	EnableScaleToZeroDatapath bool
 
 	LibDir             string // Cilium library files directory
 	RunDir             string // Cilium runtime directory
@@ -2534,6 +2540,7 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 		c.ManagedNodesSelector = sel
 	}
 	c.TunnelEndpointOverrides = vp.GetString(TunnelEndpointOverrides)
+	c.EnableScaleToZeroDatapath = vp.GetBool(EnableScaleToZeroDatapath)
 	c.LabelPrefixFile = vp.GetString(LabelPrefixFile)
 	c.Labels = vp.GetStringSlice(Labels)
 	c.LibDir = vp.GetString(LibDir)
