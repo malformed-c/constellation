@@ -40,7 +40,7 @@ spec:
         - name: operator
           image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
           imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
-          command: ["/usr/bin/cilium-operator"]
+          command: ["/usr/bin/cilium-operator-generic"]
           args:
             - --k8s-kubeconfig-path={{ .Values.operator.kubeconfigPath }}
             - --ipam=cluster-pool
