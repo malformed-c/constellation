@@ -90,7 +90,7 @@ extract: $(OUT_DIR) ## Pull ghcr images and extract pre-built binaries (no Go to
 	$(CONTAINER_RT) run --rm \
 		--entrypoint /bin/sh \
 		$(OPERATOR_IMAGE) \
-		-c 'cat /usr/bin/cilium-operator' > $(OPERATOR_OUT)
+		-c 'cat /usr/bin/cilium-operator-generic' > $(OPERATOR_OUT)
 	chmod +x $(OPERATOR_OUT)
 	@echo ""
 	@echo "Extracted:"
