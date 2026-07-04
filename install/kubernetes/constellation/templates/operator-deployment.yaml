@@ -55,6 +55,7 @@ spec:
             - --remove-cilium-node-taints=true
             - --set-cilium-node-taints=true
             - --set-cilium-is-up-condition=true
+            - --operator-prometheus-serve-addr=
             {{- if .Values.clusterName }}
             - --cluster-name={{ .Values.clusterName }}
             - --cluster-id={{ .Values.clusterID }}
