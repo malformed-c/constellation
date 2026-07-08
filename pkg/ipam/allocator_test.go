@@ -18,6 +18,7 @@ import (
 	"github.com/cilium/cilium/pkg/k8s/resource"
 	"github.com/cilium/cilium/pkg/node"
 	fakenode "github.com/cilium/cilium/pkg/node/fake"
+	"github.com/cilium/cilium/pkg/option"
 )
 
 type ownerMock struct{}
@@ -224,4 +225,99 @@ func TestAllocateNextWithExpiration(t *testing.T) {
 	// Release IPv4 address
 	err = ipam.ReleaseIP(ipv4.IP, PoolDefault())
 	require.NoError(t, err)
+}
+
+// withScaleToZeroCleanupFake overrides clearScaleToZeroFn for the duration of
+// the test and returns a func recording every IP it was called with. It also
+// saves/restores the global EnableScaleToZeroDatapath flag so tests can't
+// leak state into one another.
+func withScaleToZeroCleanupFake(t *testing.T, enabled bool, err error) *[]net.IP {
+	t.Helper()
+
+	prevEnabled := option.Config.EnableScaleToZeroDatapath
+	prevFn := clearScaleToZeroFn
+	t.Cleanup(func() {
+		option.Config.EnableScaleToZeroDatapath = prevEnabled
+		clearScaleToZeroFn = prevFn
+	})
+	option.Config.EnableScaleToZeroDatapath = enabled
+
+	calls := &[]net.IP{}
+	clearScaleToZeroFn = func(ip net.IP) error {
+		*calls = append(*calls, ip)
+		return err
+	}
+	return calls
+}
+
+func newTestIPAM(t *testing.T) *IPAM {
+	fakeAddressing := fakenode.NewAddressing()
+	localNodeStore := node.NewTestLocalNodeStore(node.LocalNode{})
+	ipam := NewIPAM(NewIPAMParams{
+		Logger:         hivetest.Logger(t),
+		NodeAddressing: fakeAddressing,
+		AgentConfig:    testConfiguration,
+		NodeDiscovery:  &ownerMock{},
+		LocalNodeStore: localNodeStore,
+		K8sEventReg:    &ownerMock{},
+		NodeResource:   &resourceMock{},
+		MTUConfig:      &mtuMock,
+	})
+	ipam.ConfigureAllocator()
+	return ipam
+}
+
+func TestClearScaleToZeroState_DisabledIsNoop(t *testing.T) {
+	calls := withScaleToZeroCleanupFake(t, false, nil)
+	ipam := newTestIPAM(t)
+
+	ipam.clearScaleToZeroState(netip.MustParseAddr("1.1.1.1"))
+
+	require.Empty(t, *calls, "clearScaleToZeroFn must not run when EnableScaleToZeroDatapath is false")
+}
+
+func TestClearScaleToZeroState_EnabledInvokesCleanup(t *testing.T) {
+	calls := withScaleToZeroCleanupFake(t, true, nil)
+	ipam := newTestIPAM(t)
+	ip := netip.MustParseAddr("1.1.1.1")
+
+	ipam.clearScaleToZeroState(ip)
+
+	require.Len(t, *calls, 1)
+	require.True(t, (*calls)[0].Equal(net.IP(ip.AsSlice())))
+}
+
+func TestClearScaleToZeroState_CleanupErrorIsNotFatal(t *testing.T) {
+	withScaleToZeroCleanupFake(t, true, errors.New("boom"))
+	ipam := newTestIPAM(t)
+
+	require.NotPanics(t, func() {
+		ipam.clearScaleToZeroState(netip.MustParseAddr("1.1.1.1"))
+	})
+}
+
+func TestAllocateAndReleaseIP_TriggerScaleToZeroCleanup(t *testing.T) {
+	calls := withScaleToZeroCleanupFake(t, true, nil)
+	ipam := newTestIPAM(t)
+	ip := netip.MustParseAddr("1.1.1.1")
+
+	err := ipam.AllocateIP(ip, "foo", PoolDefault())
+	require.NoError(t, err)
+	require.Len(t, *calls, 1, "allocation must clear stale scale-to-zero state as a backstop")
+	require.True(t, (*calls)[0].Equal(net.IP(ip.AsSlice())))
+
+	err = ipam.ReleaseIP(ip, PoolDefault())
+	require.NoError(t, err)
+	require.Len(t, *calls, 2, "release must clear scale-to-zero state so a trigger can't outlive its IP")
+	require.True(t, (*calls)[1].Equal(net.IP(ip.AsSlice())))
+}
+
+func TestAllocateNextFamily_TriggersScaleToZeroCleanup(t *testing.T) {
+	calls := withScaleToZeroCleanupFake(t, true, nil)
+	ipam := newTestIPAM(t)
+
+	result, err := ipam.AllocateNextFamily(IPv4, "foo", PoolDefault())
+	require.NoError(t, err)
+	require.Len(t, *calls, 1)
+	require.True(t, (*calls)[0].Equal(result.IP.AsSlice()))
 }
