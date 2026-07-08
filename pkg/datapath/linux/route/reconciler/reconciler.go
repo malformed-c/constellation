@@ -20,6 +20,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 	"go4.org/netipx"
+	"golang.org/x/sys/unix"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
 	"github.com/cilium/cilium/pkg/datapath/tables"
@@ -75,7 +76,15 @@ func newOps(
 	lifecycle.Append(cell.Hook{
 		OnStart: func(hc cell.HookContext) error {
 			var err error
-			ops.handle, err = safenetlink.NewHandle(nil)
+			// This reconciler only issues plain route operations (RouteReplace/
+			// RouteDel/RouteListFiltered), so scope the handle to NETLINK_ROUTE.
+			// The unscoped default also opens NETLINK_XFRM and NETLINK_NETFILTER
+			// sockets, neither used here, which needlessly fails agent startup
+			// if either family is briefly unavailable (e.g. a kernel/module
+			// mismatch after a host update, even with routing unaffected).
+			ops.handle, err = safenetlink.NewHandle(&safenetlink.HandleConfig{
+				NLFamilies: []int{unix.NETLINK_ROUTE},
+			})
 			if err != nil {
 				return err
 			}
