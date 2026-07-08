@@ -28,6 +28,16 @@ Standard Cilium layout. Constellation-specific changes:
 | `daemon/cmd/endpoint_restore.go` | relaxed node name check for managed names |
 | `pkg/ipam/managed_scope.go` | `managedScopeAllocator` — merges per-pawn CIDRs into one round-robin IPAM pool |
 
+### Scale-to-zero (STZ) datapath (active)
+
+| File | Purpose |
+|------|---------|
+| `bpf/lib/constellation_stz.h` | SYN-trap/wake hook (`constellation_stz_ingress4`), called from `local_delivery.h`. Gated by `CONSTELLATION_ENABLE_STZ` / `--enable-scale-to-zero-datapath`. |
+| `pkg/maps/constellationstz` | Go access to the pinned `constellation_stz_triggers`/`constellation_stz_flows` maps. `Clear(ip)` deletes both maps' entries for an IP. |
+| `pkg/ipam/allocator.go` (`clearScaleToZeroState`) | Calls `constellationstz.Clear` on both IP allocate and release, so a trigger leaked by a periapsis crash/restart can never outlive the IP it was armed for (bare-IP-keyed maps have no pod UID/generation binding — see git history for the incident that motivated this). |
+
+Arming/disarming policy (idle detection, wake handling) lives in periapsis's `internal/activator/`, not here — this repo only owns the datapath maps, the drop/wake hook, and the IPAM-side leak guard.
+
 ### Instance scoping (preserved, not active)
 
 `pkg/defaults/defaults.go`, `pkg/defaults/node.go`, `pkg/bpf/bpffs_linux.go`, `daemon/cmd/root.go` — instance-scoped paths via `--instance-id`. Currently unused; kept for reference.
@@ -42,7 +52,7 @@ Pass a bare label key (e.g. `periapsis.io/host`) — it auto-expands to `periaps
 2. **Runtime**: Watches for node add/remove, dynamically registers new reflectors
 3. **Fallback**: If no selector or no matching nodes, behaves like stock Cilium (single local node)
 
-Tests in `daemon/k8s/managed_nodes_test.go` cover both paths.
+Tests in `pkg/k8s/tables/managed_nodes_test.go` cover both paths.
 
 ## IPAM: managedScopeAllocator
 

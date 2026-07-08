@@ -6,6 +6,7 @@ package ipam
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"strings"
 
@@ -13,7 +14,9 @@ import (
 
 	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/maps/constellationstz"
 	"github.com/cilium/cilium/pkg/metrics"
+	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/time"
 )
 
@@ -30,6 +33,28 @@ var (
 	// ErrIPv6Disabled is returned when Ipv6 allocation is disabled
 	ErrIPv6Disabled = errors.New("IPv6 allocation disabled")
 )
+
+// clearScaleToZeroFn is overridable in tests to avoid touching real BPF maps.
+var clearScaleToZeroFn = constellationstz.Clear
+
+// clearScaleToZeroState purges any scale-to-zero (STZ) datapath trigger/flow
+// state for ip. It is called on both allocation and release: on release so a
+// leaked trigger can never outlive the IP it was armed for, and on
+// allocation as a backstop for any IP that leaked before this cleanup
+// existed. A lookup/delete failure here is only logged — it must never
+// block IP allocation or release.
+func (ipam *IPAM) clearScaleToZeroState(ip netip.Addr) {
+	if !option.Config.EnableScaleToZeroDatapath {
+		return
+	}
+	if err := clearScaleToZeroFn(net.IP(ip.AsSlice())); err != nil {
+		ipam.logger.Warn(
+			"Failed to clear scale-to-zero datapath state for IP",
+			logfields.IPAddr, ip,
+			logfields.Error, err,
+		)
+	}
+}
 
 func (ipam *IPAM) determineIPAMPool(owner string, family Family) (Pool, error) {
 	pool, err := ipam.metadata.GetIPPoolForPod(owner, family)
@@ -137,6 +162,7 @@ func (ipam *IPAM) allocateIP(ip netip.Addr, owner string, pool Pool, needSyncUps
 	)
 
 	ipam.registerIPOwner(ip, owner, pool)
+	ipam.clearScaleToZeroState(ip)
 	metrics.IPAMEvent.WithLabelValues(metricAllocate, string(family)).Inc()
 	return
 }
@@ -201,6 +227,7 @@ func (ipam *IPAM) allocateNextFamily(family Family, owner string, pool Pool, nee
 				logfields.Owner, owner,
 			)
 			ipam.registerIPOwner(resultIP, owner, pool)
+			ipam.clearScaleToZeroState(resultIP)
 			metrics.IPAMEvent.WithLabelValues(metricAllocate, string(family)).Inc()
 			return
 		}
@@ -329,6 +356,7 @@ func (ipam *IPAM) releaseIPLocked(ip netip.Addr, pool Pool) error {
 		logfields.IPAddr, ip,
 		logfields.Owner, owner,
 	)
+	ipam.clearScaleToZeroState(ip)
 
 	key := timerKey{ip: ip, pool: pool}
 	if t, ok := ipam.expirationTimers[key]; ok {
