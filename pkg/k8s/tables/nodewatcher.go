@@ -3,7 +3,7 @@
 
 package tables
 
-// Node watcher for --managed-nodes-selector.
+// Node watcher for --managed-pawns-selector.
 //
 // When the agent is configured with a label selector (e.g.
 // periapsis.io/host=engix99), this module discovers the k8s Node objects
@@ -68,7 +68,7 @@ func NewPodTableAndReflector(jg job.Group, db *statedb.DB, cs client.Clientset) 
 		return pods, nil
 	}
 
-	selector := option.Config.ManagedNodesSelector
+	selector := option.Config.ManagedPawnsSelector
 	if selector != "" {
 		// Label-selector mode: discover nodes matching the selector,
 		// create a pod reflector per node, and start a background

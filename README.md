@@ -6,13 +6,13 @@ Constellation is a fork of [Cilium](https://github.com/cilium/cilium) adapted fo
 
 Cilium assumes one agent per physical host. Its BPF maps, network interfaces, and runtime paths are singletons — `cilium_host`, `/var/run/cilium/cilium.sock`, `/sys/fs/bpf/tc/globals/`, etc.
 
-Constellation adds `--managed-nodes-selector`, a label selector that lets one agent manage all pawn nodes sharing a host. The agent handles IPAM, endpoint management, and datapath for all pawns simultaneously.
+Constellation adds `--managed-pawns-selector`, a label selector that lets one agent manage all pawn nodes sharing a host. The agent handles IPAM, endpoint management, and datapath for all pawns simultaneously.
 
 ## What changed from Cilium
 
 | Feature | Description |
 |---|---|
-| `--managed-nodes-selector` | Label selector for discovering pawn nodes. Pass a bare label key (e.g. `periapsis.io/host`) to auto-append `=<hostname>`. |
+| `--managed-pawns-selector` | Label selector for discovering pawn nodes. Pass a bare label key (e.g. `periapsis.io/host`) to auto-append `=<hostname>`. |
 | `managedScopeAllocator` | IPAM allocator that merges per-pawn CIDRs into a single round-robin pool. Each pawn gets its own `/20` (or configured size) from its CiliumNode. |
 | Pod reflector | Watches pods across all managed node names, not just the local node. |
 | Endpoint restore | Restores endpoints for pods on any managed node after agent restart. |
@@ -26,14 +26,14 @@ Constellation runs as a DaemonSet (or perigeos-managed pod) on the physical host
 
 ```yaml
 args:
-  - --managed-nodes-selector=periapsis.io/host
+  - --managed-pawns-selector=periapsis.io/host
   - --routing-mode=tunnel
   - --kube-proxy-replacement=true
   - --ipam=cluster-pool
   - --bpf-lb-sock-hostns-only=true
 ```
 
-The `--managed-nodes-selector=periapsis.io/host` flag auto-appends `=<hostname>`, so the agent discovers all nodes labeled `periapsis.io/host=<this-host>`.
+The `--managed-pawns-selector=periapsis.io/host` flag auto-appends `=<hostname>`, so the agent discovers all nodes labeled `periapsis.io/host=<this-host>`.
 
 See `deploy/constellation/` in the perigeos repo for full manifests.
 

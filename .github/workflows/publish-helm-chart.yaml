@@ -4,7 +4,7 @@ name: Publish Helm Chart
 # to ghcr.io as an OCI artifact, alongside the agent/operator images
 # (build-images.yaml). The chart's defaults already encode the Constellation
 # datapath (routing-mode=tunnel, kube-proxy-replacement, cluster-pool IPAM,
-# managed-nodes-selector, ...), so
+# managed-pawns-selector, ...), so
 #   helm install constellation oci://ghcr.io/<owner>/charts/constellation \
 #     --set k8sServiceHost=<api-vip> --set k8sServicePort=6443
 # brings up the agent without any extra values.

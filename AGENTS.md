@@ -6,7 +6,7 @@ Constellation is a minimal fork of Cilium adapted for the Perigeos host-sharding
 
 ## What this repo is
 
-One Cilium agent per physical host manages pods across all virtual nodes (pawns) using `--managed-nodes-selector` for label-based discovery. The diff versus upstream Cilium is intentionally tiny.
+One Cilium agent per physical host manages pods across all virtual nodes (pawns) using `--managed-pawns-selector` for label-based discovery. The diff versus upstream Cilium is intentionally tiny.
 
 Every change should be evaluated: *does this need to be a fork change, or can it go upstream?*
 
@@ -20,8 +20,8 @@ Standard Cilium layout. Constellation-specific changes:
 
 | File | Purpose |
 |------|---------|
-| `daemon/cmd/daemon_main.go` | `--managed-nodes-selector` flag registration |
-| `pkg/option/config.go` | `ManagedNodesSelector` field, bare-key auto-expansion |
+| `daemon/cmd/daemon_main.go` | `--managed-pawns-selector` flag registration |
+| `pkg/option/config.go` | `ManagedPawnsSelector` field, bare-key auto-expansion |
 | `daemon/k8s/pods.go` | `NewPodTableAndReflector` creates per-node reflectors; integrates node watcher |
 | `daemon/k8s/nodes.go` | node watcher: `discoverManagedNodes` (List) + `startNodeWatcher` (Watch) |
 | `pkg/node/types/nodename.go` | `SetManagedNames`/`GetManagedNames`/`IsManaged` API |
@@ -44,7 +44,7 @@ Arming/disarming policy (idle detection, wake handling) lives in periapsis's `in
 
 ---
 
-## Key flag: --managed-nodes-selector
+## Key flag: --managed-pawns-selector
 
 Pass a bare label key (e.g. `periapsis.io/host`) — it auto-expands to `periapsis.io/host=<os.Hostname()>`. The agent then:
 
@@ -65,7 +65,7 @@ The allocator is initialized with the primary node's CIDR plus CIDRs fetched fro
 ## Key deployment flags
 
 ```
---managed-nodes-selector=periapsis.io/host
+--managed-pawns-selector=periapsis.io/host
 --routing-mode=tunnel
 --kube-proxy-replacement=true
 --ipam=cluster-pool
@@ -84,7 +84,7 @@ The allocator is initialized with the primary node's CIDR plus CIDRs fetched fro
 
 **Never hardcode singleton paths.** Use `defaults.RuntimePath`, `defaults.LibraryPath`, `defaults.BPFFSRoot`, and interface name vars.
 
-**`ManagedNodesSelector` not `ManagedNodeSelector`.** The flag was renamed to clarify it manages multiple nodes. Keep this consistent — the old name caused confusion.
+**`ManagedPawnsSelector` not `ManagedNodesSelector`/`ManagedNodeSelector`.** The flag was renamed twice: first to clarify it manages multiple nodes, then again to match periapsis's "pawn" terminology for the Node objects it manages. Keep this consistent — old names cause confusion.
 
 ---
 

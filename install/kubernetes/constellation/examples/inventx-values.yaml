@@ -13,8 +13,8 @@
 # (no --enable-external-ips flag), so it needs no override.
 
 # inventx is a stock single-datapath cluster (not the sharded Constellation fork),
-# so disable the managed-nodes shard selector and select by the inventx node label.
-managedNodesSelector: ""
+# so disable the managed-pawns shard selector and select by the inventx node label.
+managedPawnsSelector: ""
 nodeSelector:
   cni: "cilium"
 

@@ -267,12 +267,12 @@ const (
 	// multiple agents can coexist on the same host.
 	InstanceID = "instance-id"
 
-	// ManagedNodesSelector is a Kubernetes label selector for discovering
-	// which Node objects this agent manages. The agent watches matching
-	// nodes and creates per-node pod reflectors dynamically.
+	// ManagedPawnsSelector is a Kubernetes label selector for discovering
+	// which Node objects (pawns) this agent manages. The agent watches
+	// matching nodes and creates per-node pod reflectors dynamically.
 	// If the value contains no "=" (bare label key), the agent appends
 	// "=<os.Hostname()>" automatically. Empty = standard single-node mode.
-	ManagedNodesSelector = "managed-nodes-selector"
+	ManagedPawnsSelector = "managed-pawns-selector"
 
 	// TunnelEndpointOverrides is a comma-separated list of node=ip pairs
 	// that override the VXLAN tunnel endpoint IP for specific remote nodes.
@@ -1241,10 +1241,10 @@ type DaemonConfig struct {
 	// runtime paths, BPF mounts and interface names are scoped under this ID.
 	InstanceID string
 
-	// ManagedNodesSelector is the label selector string for discovering
-	// managed nodes dynamically. Populated from --managed-nodes-selector.
+	// ManagedPawnsSelector is the label selector string for discovering
+	// managed pawns dynamically. Populated from --managed-pawns-selector.
 	// Empty means single-node mode (standard Cilium behaviour).
-	ManagedNodesSelector string
+	ManagedPawnsSelector string
 
 	// TunnelEndpointOverrides is the raw comma-separated "node=ip" string
 	// from --tunnel-endpoint-overrides. Parsed by the node manager at startup.
@@ -2529,7 +2529,7 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 	c.AllocatorListTimeout = vp.GetDuration(AllocatorListTimeoutName)
 	c.KeepConfig = vp.GetBool(KeepConfig)
 	c.InstanceID = vp.GetString(InstanceID)
-	if sel := vp.GetString(ManagedNodesSelector); sel != "" {
+	if sel := vp.GetString(ManagedPawnsSelector); sel != "" {
 		// Bare label key (no "=") → append "=<hostname>" so the selector
 		// resolves to the current physical host automatically.
 		if !strings.Contains(sel, "=") {
@@ -2537,7 +2537,7 @@ func (c *DaemonConfig) Populate(logger *slog.Logger, vp *viper.Viper) {
 				sel = sel + "=" + h
 			}
 		}
-		c.ManagedNodesSelector = sel
+		c.ManagedPawnsSelector = sel
 	}
 	c.TunnelEndpointOverrides = vp.GetString(TunnelEndpointOverrides)
 	c.EnableScaleToZeroDatapath = vp.GetBool(EnableScaleToZeroDatapath)
