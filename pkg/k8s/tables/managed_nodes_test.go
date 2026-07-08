@@ -262,13 +262,13 @@ func slimNode(name string, labels map[string]string) *slim_corev1.Node {
 	}
 }
 
-// clearSelector resets option.Config.ManagedNodesSelector after the test.
+// clearSelector resets option.Config.ManagedPawnsSelector after the test.
 func clearSelector(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() { option.Config.ManagedNodesSelector = "" })
+	t.Cleanup(func() { option.Config.ManagedPawnsSelector = "" })
 }
 
-// selectorHiveWithTable builds a hive with option.Config.ManagedNodesSelector
+// selectorHiveWithTable builds a hive with option.Config.ManagedPawnsSelector
 // set. Pre-creates Node objects in the fake clientset before hive starts so
 // that discoverManagedNodes can find them during Provide.
 func selectorHiveWithTable(
@@ -280,7 +280,7 @@ func selectorHiveWithTable(
 
 	// Set the selector BEFORE hive construction — NewPodTableAndReflector
 	// reads it during Provide.
-	option.Config.ManagedNodesSelector = selector
+	option.Config.ManagedPawnsSelector = selector
 
 	var (
 		db  *statedb.DB
@@ -322,10 +322,10 @@ func selectorHiveWithTable(
 
 // ─── Selector-based discovery tests ──────────────────────────────────────────
 
-// TestManagedNodesSelector_DiscoversLabeledNodes verifies the core selector
+// TestManagedPawnsSelector_DiscoversLabeledNodes verifies the core selector
 // path: nodes matching the label selector are discovered, their pods appear
 // in the table, and unlabeled nodes are excluded.
-func TestManagedNodesSelector_DiscoversLabeledNodes(t *testing.T) {
+func TestManagedPawnsSelector_DiscoversLabeledNodes(t *testing.T) {
 	clearManagedNames(t)
 	clearSelector(t)
 	nodeTypes.SetName("host-sel-1")
@@ -367,10 +367,10 @@ func TestManagedNodesSelector_DiscoversLabeledNodes(t *testing.T) {
 	require.False(t, nodeTypes.IsManaged("other-host"))
 }
 
-// TestManagedNodesSelector_EmptySelector_DefaultBehaviour verifies that an
+// TestManagedPawnsSelector_EmptySelector_DefaultBehaviour verifies that an
 // empty selector behaves identically to stock Cilium: only the local node's
 // pods appear.
-func TestManagedNodesSelector_EmptySelector_DefaultBehaviour(t *testing.T) {
+func TestManagedPawnsSelector_EmptySelector_DefaultBehaviour(t *testing.T) {
 	clearManagedNames(t)
 	clearSelector(t)
 	nodeTypes.SetName("local-host")
@@ -396,10 +396,10 @@ func TestManagedNodesSelector_EmptySelector_DefaultBehaviour(t *testing.T) {
 		"remote pod must not appear in standard single-node mode")
 }
 
-// TestManagedNodesSelector_NoMatchingNodes_FallsBackToLocal verifies that
+// TestManagedPawnsSelector_NoMatchingNodes_FallsBackToLocal verifies that
 // when the selector matches no nodes, the agent falls back to managing
 // the local node only.
-func TestManagedNodesSelector_NoMatchingNodes_FallsBackToLocal(t *testing.T) {
+func TestManagedPawnsSelector_NoMatchingNodes_FallsBackToLocal(t *testing.T) {
 	clearManagedNames(t)
 	clearSelector(t)
 	nodeTypes.SetName("local-host")
@@ -421,10 +421,10 @@ func TestManagedNodesSelector_NoMatchingNodes_FallsBackToLocal(t *testing.T) {
 		"local node must be managed after fallback")
 }
 
-// TestManagedNodesSelector_DynamicNodeAdd verifies that when a new Node
+// TestManagedPawnsSelector_DynamicNodeAdd verifies that when a new Node
 // object matching the selector appears at runtime, the node watcher
 // detects it and registers a pod reflector for it.
-func TestManagedNodesSelector_DynamicNodeAdd(t *testing.T) {
+func TestManagedPawnsSelector_DynamicNodeAdd(t *testing.T) {
 	clearManagedNames(t)
 	clearSelector(t)
 	nodeTypes.SetName("host-dyn")
@@ -472,10 +472,10 @@ func TestManagedNodesSelector_DynamicNodeAdd(t *testing.T) {
 		"pod on initial node must still be present")
 }
 
-// TestManagedNodesSelector_NodeRemoval verifies that when a Node object
+// TestManagedPawnsSelector_NodeRemoval verifies that when a Node object
 // matching the selector is deleted, the node is removed from the managed
 // set and IsManaged returns false.
-func TestManagedNodesSelector_NodeRemoval(t *testing.T) {
+func TestManagedPawnsSelector_NodeRemoval(t *testing.T) {
 	clearManagedNames(t)
 	clearSelector(t)
 	nodeTypes.SetName("host-rm")

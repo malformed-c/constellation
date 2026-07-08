@@ -1,5 +1,5 @@
 # Reserved for future operator-managed configuration. The agent discovers
-# managed nodes dynamically via --managed-nodes-selector, so this is empty today.
+# managed pawns dynamically via --managed-pawns-selector, so this is empty today.
 apiVersion: v1
 kind: ConfigMap
 metadata:

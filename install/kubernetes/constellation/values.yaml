@@ -19,11 +19,11 @@ k8sServiceHost: ""
 k8sServicePort: "6443"
 
 # Agent runs on nodes matching nodeSelector, and (for the Constellation fork's
-# sharded datapath) only MANAGES nodes carrying managedNodesSelector. Set
-# managedNodesSelector to "" for a stock single-datapath cluster (no sharding).
+# sharded datapath) only MANAGES pawn nodes carrying managedPawnsSelector. Set
+# managedPawnsSelector to "" for a stock single-datapath cluster (no sharding).
 nodeSelector:
   periapsis.io/primary: "true"
-managedNodesSelector: periapsis.io/host
+managedPawnsSelector: periapsis.io/host
 
 # Optional cilium cluster identity (clustermesh). 0 / "" = unset.
 clusterName: ""

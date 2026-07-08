@@ -73,8 +73,8 @@ spec:
             - --enable-ipv6=false
             - --enable-bpf-masquerade=true
             - --bpf-lb-sock-hostns-only=true
-            {{- if .Values.managedNodesSelector }}
-            - --managed-nodes-selector={{ .Values.managedNodesSelector }}
+            {{- if .Values.managedPawnsSelector }}
+            - --managed-pawns-selector={{ .Values.managedPawnsSelector }}
             {{- end }}
             {{- if gt (int .Values.mtu) 0 }}
             - --mtu={{ .Values.mtu }}
