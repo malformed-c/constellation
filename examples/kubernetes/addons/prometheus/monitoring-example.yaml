@@ -14059,7 +14059,10 @@ data:
       # https://github.com/prometheus/prometheus/blob/master/documentation/examples/prometheus-kubernetes.yml#L79
       - job_name: 'kubernetes-endpoints'
         kubernetes_sd_configs:
-          - role: endpoints
+          # endpointslice (not the deprecated core v1 endpoints role): reads
+          # discovery.k8s.io/EndpointSlice. All relabels below use service/pod/
+          # namespace meta, which the endpointslice role still attaches unchanged.
+          - role: endpointslice
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_label_k8s_app]
             action: keep
@@ -14170,8 +14173,15 @@ rules:
   - nodes
   - nodes/proxy
   - services
-  - endpoints
   - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
   verbs:
   - get
   - list
