@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"slices"
@@ -39,6 +40,7 @@ import (
 	"github.com/cilium/cilium/pkg/k8s/watchers/resources"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/maps/constellationstz"
 	"github.com/cilium/cilium/pkg/maps/lxcmap"
 	"github.com/cilium/cilium/pkg/metrics"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
@@ -605,6 +607,32 @@ func (r *endpointRestorer) regenerateRestoredEndpoints(state *endpointRestoreSta
 	}()
 }
 
+// restoreScaleToZeroFn is overridable in tests to avoid touching real BPF maps.
+var restoreScaleToZeroFn = constellationstz.Clear
+
+// clearRestoredEndpointScaleToZeroState purges any scale-to-zero (STZ)
+// datapath trigger/flow state for a just-restored endpoint's IP.
+//
+// A daemon restart means periapsis's own arm/disarm state may have been
+// racing independently of IPAM (which normally clears leaked trigger/flow
+// entries on allocate/release, see pkg/ipam/allocator.go's
+// clearScaleToZeroState) — a restored endpoint keeps its existing IP
+// without ever going through IPAM, so it wouldn't otherwise get that
+// cleanup. A lookup/delete failure here is only logged — it must never
+// block endpoint restoration.
+func clearRestoredEndpointScaleToZeroState(logger *slog.Logger, epID uint16, addr netip.Addr) {
+	if !option.Config.EnableScaleToZeroDatapath || !addr.IsValid() {
+		return
+	}
+	if err := restoreScaleToZeroFn(net.IP(addr.AsSlice())); err != nil {
+		logger.Warn(
+			"Failed to clear scale-to-zero datapath state for restored endpoint",
+			logfields.Error, err,
+			logfields.EndpointID, epID,
+		)
+	}
+}
+
 // Trigger asynchronous regeneration of restored endpoints.
 //
 // This method assumes that all the endpoints for which regeneration is requested are
@@ -661,6 +689,7 @@ func (r *endpointRestorer) handleRestoredEndpointsRegeneration(endpoints []*endp
 				)
 				endpointsRegenerated <- false
 			} else {
+				clearRestoredEndpointScaleToZeroState(r.logger, ep.ID, ep.IPv4Address())
 				endpointsRegenerated <- true
 			}
 		}(ep, regenWg, epRegenerated)
