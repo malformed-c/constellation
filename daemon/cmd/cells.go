@@ -84,6 +84,7 @@ import (
 	_ "github.com/cilium/cilium/pkg/nodediscovery/eni"
 	"github.com/cilium/cilium/pkg/nodeipamconfig"
 	"github.com/cilium/cilium/pkg/option"
+	"github.com/cilium/cilium/pkg/podendpointwatchdog"
 	policy "github.com/cilium/cilium/pkg/policy/cell"
 	policyDirectory "github.com/cilium/cilium/pkg/policy/directory"
 	policyK8s "github.com/cilium/cilium/pkg/policy/k8s"
@@ -225,6 +226,11 @@ var (
 
 		// Endpoint cell provides the Endpoint modules.
 		endpoint.Cell,
+
+		// Detects pods that are Running with an IP but have no local Cilium
+		// endpoint (e.g. lost across an agent restart) and deletes them to
+		// force a fresh CNI ADD.
+		podendpointwatchdog.Cell,
 
 		// NodeManager maintains a collection of other nodes in the cluster.
 		nodeManager.Cell,
