@@ -42,9 +42,11 @@ Arming/disarming policy (idle detection, wake handling) lives in periapsis's `in
 
 | File | Purpose |
 |------|---------|
-| `pkg/podendpointwatchdog/watchdog.go` | Periodically cross-checks Running pods (with a `PodIP`) across all managed pawns against `endpointmanager`, and deletes any pod that's been missing its local Cilium endpoint for 2+ consecutive scans past a grace period. |
+| `pkg/podendpointwatchdog/watchdog.go` | Periodically cross-checks Running pods (with a `PodIP`) across all managed pawns against `endpointmanager`, and deletes any pod that's continuously observed missing its local Cilium endpoint for at least the grace period. |
 
 Heals a confirmed production failure mode: an endpoint lost across an agent restart (while the pod's netns/IP linger) is invisible to both IPAM and the agent, and nothing else re-triggers CNI ADD for it — the pod just stays `Running` with a dead datapath (`EHOSTUNREACH` from the host). Deleting the pod forces Kubernetes/perigeos to recreate it with a fresh CNI ADD. Gated by `--enable-pod-endpoint-watchdog` (default `true`); interval/grace period via `--pod-endpoint-watchdog-interval` (default `60s`) / `--pod-endpoint-watchdog-grace-period` (default `90s`). Does **not** catch an endpoint that exists but is policy-dropped (a separate, unconfirmed failure mode) — only missing-endpoint.
+
+**Grace period is self-timed, not pod-age-based.** It deliberately does *not* read `pod.Status.StartTime` — a live incident found a control plane that never populates that field (always `nil`), which silently disabled an earlier StartTime-based grace check on every pod, forever. The grace period is instead measured from the first time the watchdog's own scan observed the pod missing its endpoint (`watchdog.pending`), so it works regardless of what the control plane does or doesn't populate on pod status.
 
 ### Instance scoping (preserved, not active)
 
