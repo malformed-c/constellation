@@ -17,6 +17,7 @@ Constellation adds `--managed-pawns-selector`, a label selector that lets one ag
 | Pod reflector | Watches pods across all managed node names, not just the local node. |
 | Endpoint restore | Restores endpoints for pods on any managed node after agent restart. |
 | Scale-to-zero (STZ) datapath | SYN-trap/wake mechanism for pods idled by periapsis. Gated by `--enable-scale-to-zero-datapath`. See [Scale-to-zero datapath](#scale-to-zero-stz-datapath) below. |
+| Pod-endpoint watchdog | Periodically deletes Running pods whose local Cilium endpoint went missing (e.g. lost across an agent restart), forcing a fresh CNI ADD. Gated by `--enable-pod-endpoint-watchdog` (default on). |
 
 Everything else derives from Cilium unmodified.
 

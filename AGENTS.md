@@ -38,6 +38,14 @@ Standard Cilium layout. Constellation-specific changes:
 
 Arming/disarming policy (idle detection, wake handling) lives in periapsis's `internal/activator/`, not here — this repo only owns the datapath maps, the drop/wake hook, and the IPAM-side leak guard.
 
+### Pod-endpoint watchdog (active)
+
+| File | Purpose |
+|------|---------|
+| `pkg/podendpointwatchdog/watchdog.go` | Periodically cross-checks Running pods (with a `PodIP`) across all managed pawns against `endpointmanager`, and deletes any pod that's been missing its local Cilium endpoint for 2+ consecutive scans past a grace period. |
+
+Heals a confirmed production failure mode: an endpoint lost across an agent restart (while the pod's netns/IP linger) is invisible to both IPAM and the agent, and nothing else re-triggers CNI ADD for it — the pod just stays `Running` with a dead datapath (`EHOSTUNREACH` from the host). Deleting the pod forces Kubernetes/perigeos to recreate it with a fresh CNI ADD. Gated by `--enable-pod-endpoint-watchdog` (default `true`); interval/grace period via `--pod-endpoint-watchdog-interval` (default `60s`) / `--pod-endpoint-watchdog-grace-period` (default `90s`). Does **not** catch an endpoint that exists but is policy-dropped (a separate, unconfirmed failure mode) — only missing-endpoint.
+
 ### Instance scoping (preserved, not active)
 
 `pkg/defaults/defaults.go`, `pkg/defaults/node.go`, `pkg/bpf/bpffs_linux.go`, `daemon/cmd/root.go` — instance-scoped paths via `--instance-id`. Currently unused; kept for reference.
