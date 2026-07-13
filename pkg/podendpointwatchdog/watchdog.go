@@ -47,7 +47,7 @@ func (c Config) Flags(flags *pflag.FlagSet) {
 	flags.Duration("pod-endpoint-watchdog-interval", c.PodEndpointWatchdogInterval,
 		"Interval between pod-endpoint watchdog scans")
 	flags.Duration("pod-endpoint-watchdog-grace-period", c.PodEndpointWatchdogGracePeriod,
-		"Minimum pod age (since first container start) before it's eligible for pod-endpoint watchdog healing")
+		"Minimum duration a pod must continuously observe as missing its Cilium endpoint before pod-endpoint watchdog heals it")
 }
 
 // Cell registers the pod-endpoint watchdog.
@@ -111,6 +111,7 @@ func registerWatchdog(p params) {
 		endpoints:   p.EndpointManager,
 		podDeleter:  clientsetPodDeleter{clientset: p.Clientset},
 		gracePeriod: p.Config.PodEndpointWatchdogGracePeriod,
+		now:         time.Now,
 		pending:     make(map[k8stypes.UID]time.Time),
 	}
 
@@ -139,17 +140,26 @@ type watchdog struct {
 
 	gracePeriod time.Duration
 
-	// pending tracks pods first observed as Running-with-IP-but-no-endpoint,
-	// keyed by UID. A pod is only healed once the condition has persisted
-	// across at least two consecutive scans, so a single transient/racy
-	// read (e.g. a pod whose CNI ADD is still in flight) never triggers a
-	// delete on its own.
+	// now is overridable in tests for a deterministic clock; production
+	// wiring always sets it to time.Now.
+	now func() time.Time
+
+	// pending tracks pods observed as Running-with-IP-but-no-endpoint, keyed
+	// by UID, with the time each was FIRST observed that way. A pod is only
+	// healed once that has been continuously true for at least gracePeriod,
+	// so a single transient/racy read (e.g. a pod whose CNI ADD is still in
+	// flight) never triggers a delete on its own.
+	//
+	// This is deliberately self-contained rather than trusting any
+	// pod-provided timestamp (e.g. status.startTime): not every control
+	// plane populates one reliably, and one that gets bumped by container
+	// restarts would silently defeat the grace period entirely.
 	pending map[k8stypes.UID]time.Time
 }
 
 func (w *watchdog) check(ctx context.Context) error {
 	txn := w.db.ReadTxn()
-	now := time.Now()
+	now := w.now()
 	seen := make(map[k8stypes.UID]struct{})
 
 	for pod := range w.podTable.All(txn) {
@@ -165,10 +175,6 @@ func (w *watchdog) check(ctx context.Context) error {
 		if pod.Status.Phase != slim_corev1.PodRunning || pod.Status.PodIP == "" {
 			continue
 		}
-		if pod.Status.StartTime == nil || now.Sub(pod.Status.StartTime.Time) < w.gracePeriod {
-			// Too young: CNI ADD / endpoint creation may still be in flight.
-			continue
-		}
 
 		addr, err := netip.ParseAddr(pod.Status.PodIP)
 		if err != nil {
@@ -179,16 +185,24 @@ func (w *watchdog) check(ctx context.Context) error {
 		}
 
 		seen[pod.UID] = struct{}{}
-		if _, alreadyPending := w.pending[pod.UID]; alreadyPending {
-			w.heal(ctx, pod)
-		} else {
+		firstSeen, alreadyPending := w.pending[pod.UID]
+		if !alreadyPending {
 			w.pending[pod.UID] = now
+			w.logger.Debug("Pod missing its local Cilium endpoint; starting grace period",
+				logfields.K8sPodName, pod.Name,
+				logfields.K8sNamespace, pod.Namespace,
+				logfields.IPAddr, pod.Status.PodIP,
+			)
+			continue
+		}
+		if now.Sub(firstSeen) >= w.gracePeriod {
+			w.heal(ctx, pod)
 		}
 	}
 
 	// Forget any pod that's no longer missing its endpoint (healed itself,
-	// was deleted, or simply left the table), so the two-scan confirmation
-	// requirement re-applies from scratch if it ever reappears.
+	// was deleted, or simply left the table), so the grace period re-applies
+	// from scratch if it ever reappears.
 	for uid := range w.pending {
 		if _, ok := seen[uid]; !ok {
 			delete(w.pending, uid)
