@@ -64,6 +64,12 @@ Pass a bare label key (e.g. `periapsis.io/host`) — it auto-expands to `periaps
 
 Tests in `pkg/k8s/tables/managed_nodes_test.go` cover both paths.
 
+## KUBERNETES_SERVICE_HOST auto-detection
+
+`k8sServiceHost` (the API server address, required — kube-proxy is replaced so the agent has no kube-proxy-provided path to it) is a single Helm value shared by every node running the DaemonSet. But whether the API server happens to be reachable on a given node's own loopback is a per-node runtime fact (true for a control-plane-colocated node, false for a remote one) — a single static value can't be correct for both.
+
+`agent-daemonset.yaml`'s `resolve-k8s-service-host` initContainer handles this without any per-node config: since the pod is `hostNetwork: true`, it polls `127.0.0.1:<k8sServicePort>` (bounded retry, ~75s, to survive a cold boot where the local API server and this initContainer start concurrently) and writes `127.0.0.1` to a shared `emptyDir` if something answers there, else falls through to the configured `k8sServiceHost` unchanged. The main container's `command` is a small `sh -c` wrapper that reads that file and `export`s it over the env-var default before exec'ing `cilium-agent` — an initContainer can't mutate another container's env directly, so this file-then-export handoff is required.
+
 ## IPAM: managedScopeAllocator
 
 Each pawn CiliumNode has its own pod CIDR (e.g. `/20`). `managedScopeAllocator` merges all pawn CIDRs into one pool and allocates round-robin. This allows one agent to manage 30+ pawns × 4094 IPs each.
