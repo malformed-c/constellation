@@ -71,6 +71,14 @@ spec:
         - name: resolve-k8s-service-host
           image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          # Probe the SAME port the main container's KUBERNETES_SERVICE_PORT
+          # env var below actually uses (not a separately-templated literal)
+          # so detection port == connect port always holds, even if this
+          # deployment's k8sServicePort value has drifted from the live API
+          # server's real port for any reason.
+          env:
+            - name: KUBERNETES_SERVICE_PORT
+              value: {{ .Values.k8sServicePort | quote }}
           command:
             - /bin/bash
             - -c
@@ -84,7 +92,7 @@ spec:
               # post-reboot). Poll for up to ~75s before giving up.
               host=""
               for _ in $(seq 1 25); do
-                if timeout 2 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/{{ .Values.k8sServicePort }}"' 2>/dev/null; then
+                if timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/${KUBERNETES_SERVICE_PORT}" 2>/dev/null; then
                   host="127.0.0.1"
                   break
                 fi
