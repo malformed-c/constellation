@@ -891,11 +891,18 @@ func (n *linuxNodeHandler) deleteIPsec(oldNode *nodeTypes.Node) error {
 	scopedLog := n.log.With(logfields.NodeName, oldNode.Name)
 	scopedLog.Debug("Removing IPsec configuration for node")
 
-	nodeID := n.getNodeIDForNode(oldNode)
-	if nodeID == 0 {
-		scopedLog.Warn("No node ID found for node.")
-	} else {
-		errs = errors.Join(errs, n.ipsecAgent.DeleteIPsecEndpoint(nodeID))
+	// Managed nodes (perigeos pawns) share the local node's node ID (see
+	// getNodeIDForNode's IP-based dedup on the shared CiliumInternalIP), so
+	// tearing down the IPsec endpoint for it here would drop encryption for
+	// the whole physical host - and every other pawn still using that ID -
+	// just because one pawn's CiliumNode was deleted.
+	if !nodeTypes.IsManaged(oldNode.Name) {
+		nodeID := n.getNodeIDForNode(oldNode)
+		if nodeID == 0 {
+			scopedLog.Warn("No node ID found for node.")
+		} else {
+			errs = errors.Join(errs, n.ipsecAgent.DeleteIPsecEndpoint(nodeID))
+		}
 	}
 
 	// This is only needed in IPAM modes where we install one route per
