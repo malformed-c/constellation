@@ -120,7 +120,7 @@ func TestSyncManagedCiliumInternalIP_AppendsWhenAbsent(t *testing.T) {
 	nd, _ := newManagedTestND(t, pawn)
 
 	err := nd.syncManagedCiliumInternalIP(context.Background(), "pawn-1",
-		"10.0.0.1", "fd00::1", "10.0.0.99", "fd00::99")
+		"10.0.0.1", "fd00::1", "10.0.0.99", "fd00::99", "10.0.0.88", "fd00::88")
 	require.NoError(t, err)
 
 	require.Equal(t, "10.0.0.1", addrOfType(t, nd.clientset, "pawn-1", nodeAddressing.NodeCiliumInternalIP, false))
@@ -130,6 +130,8 @@ func TestSyncManagedCiliumInternalIP_AppendsWhenAbsent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "10.0.0.99", cn.Spec.HealthAddressing.IPv4)
 	require.Equal(t, "fd00::99", cn.Spec.HealthAddressing.IPv6)
+	require.Equal(t, "10.0.0.88", cn.Spec.IngressAddressing.IPV4)
+	require.Equal(t, "fd00::88", cn.Spec.IngressAddressing.IPV6)
 	// Preserved upstream/operator-owned fields.
 	require.Equal(t, "192.168.0.10", addrOfType(t, nd.clientset, "pawn-1", nodeAddressing.NodeInternalIP, false))
 	require.Equal(t, []iputil.Prefix{iputil.PrefixFrom(netip.MustParsePrefix("10.10.0.0/24"))}, cn.Spec.IPAM.PodCIDRs)
@@ -142,7 +144,7 @@ func TestSyncManagedCiliumInternalIP_UpdatesInPlace(t *testing.T) {
 	pawn := ciliumNode("pawn-1", ciliumInternalIP("10.0.0.1"))
 	nd, _ := newManagedTestND(t, pawn)
 
-	err := nd.syncManagedCiliumInternalIP(context.Background(), "pawn-1", "10.0.0.2", "", "", "")
+	err := nd.syncManagedCiliumInternalIP(context.Background(), "pawn-1", "10.0.0.2", "", "", "", "", "")
 	require.NoError(t, err)
 
 	require.Equal(t, "10.0.0.2", addrOfType(t, nd.clientset, "pawn-1", nodeAddressing.NodeCiliumInternalIP, false))
@@ -157,7 +159,7 @@ func TestSyncManagedCiliumInternalIP_NoopWhenUnchanged(t *testing.T) {
 	pawn.Spec.HealthAddressing.IPv4 = "10.0.0.99"
 	nd, updateCalls := newManagedTestND(t, pawn)
 
-	err := nd.syncManagedCiliumInternalIP(context.Background(), "pawn-1", "10.0.0.1", "", "10.0.0.99", "")
+	err := nd.syncManagedCiliumInternalIP(context.Background(), "pawn-1", "10.0.0.1", "", "10.0.0.99", "", "", "")
 	require.NoError(t, err)
 	require.Zero(t, *updateCalls, "no Update should be issued when nothing changed")
 }
@@ -169,7 +171,7 @@ func TestSyncManagedCiliumInternalIP_EmptyIPsLeaveFamilyUntouched(t *testing.T) 
 	pawn := ciliumNode("pawn-1", ciliumInternalIP("fd00::1"))
 	nd, _ := newManagedTestND(t, pawn)
 
-	err := nd.syncManagedCiliumInternalIP(context.Background(), "pawn-1", "10.0.0.1", "", "", "")
+	err := nd.syncManagedCiliumInternalIP(context.Background(), "pawn-1", "10.0.0.1", "", "", "", "", "")
 	require.NoError(t, err)
 
 	require.Equal(t, "fd00::1", addrOfType(t, nd.clientset, "pawn-1", nodeAddressing.NodeCiliumInternalIP, true),
@@ -178,14 +180,17 @@ func TestSyncManagedCiliumInternalIP_EmptyIPsLeaveFamilyUntouched(t *testing.T) 
 }
 
 // localNodeWithCiliumIP builds a LocalNode advertising the given v4 cilium
-// internal IP and v4 health IP.
-func localNodeWithCiliumIP(name, ciliumV4, healthV4 string) *node.LocalNode {
+// internal IP, v4 health IP and v4 ingress IP.
+func localNodeWithCiliumIP(name, ciliumV4, healthV4, ingressV4 string) *node.LocalNode {
 	ln := &node.LocalNode{Node: nodeTypes.Node{Name: name}}
 	if ciliumV4 != "" {
 		ln.SetCiliumInternalIP(net.ParseIP(ciliumV4))
 	}
 	if healthV4 != "" {
 		ln.IPv4HealthIP = iputil.AddrFrom(netip.MustParseAddr(healthV4))
+	}
+	if ingressV4 != "" {
+		ln.IPv4IngressIP = net.ParseIP(ingressV4)
 	}
 	return ln
 }
@@ -204,21 +209,33 @@ func withManagedNames(t *testing.T, local string, names []string) {
 }
 
 // TestUpdateManagedCiliumInternalIPs_PropagatesAndSkipsLocal verifies that the
-// host's CiliumInternalIP is propagated onto every managed pawn except the
-// local host node itself, which is left untouched.
+// host's CiliumInternalIP, HealthAddressing and IngressAddressing are
+// propagated onto every managed pawn except the local host node itself,
+// which is left untouched.
 func TestUpdateManagedCiliumInternalIPs_PropagatesAndSkipsLocal(t *testing.T) {
 	withManagedNames(t, "host", []string{"host", "pawn-1", "pawn-2"})
 
 	host := ciliumNode("host") // no CiliumInternalIP — must stay that way
 	nd, _ := newManagedTestND(t, host, ciliumNode("pawn-1"), ciliumNode("pawn-2"))
 
-	ln := localNodeWithCiliumIP("host", "10.0.0.1", "10.0.0.99")
+	ln := localNodeWithCiliumIP("host", "10.0.0.1", "10.0.0.99", "10.0.0.88")
 	nd.updateManagedCiliumInternalIPs(context.Background(), ln)
 
 	require.Equal(t, "10.0.0.1", addrOfType(t, nd.clientset, "pawn-1", nodeAddressing.NodeCiliumInternalIP, false))
 	require.Equal(t, "10.0.0.1", addrOfType(t, nd.clientset, "pawn-2", nodeAddressing.NodeCiliumInternalIP, false))
 	require.Empty(t, addrOfType(t, nd.clientset, "host", nodeAddressing.NodeCiliumInternalIP, false),
 		"the local host node must be skipped, not updated")
+
+	for _, name := range []string{"pawn-1", "pawn-2"} {
+		cn, err := nd.clientset.CiliumV2().CiliumNodes().Get(context.Background(), name, metav1.GetOptions{})
+		require.NoError(t, err)
+		require.Equal(t, "10.0.0.99", cn.Spec.HealthAddressing.IPv4)
+		require.Equal(t, "10.0.0.88", cn.Spec.IngressAddressing.IPV4,
+			"IngressAddressing must be propagated the same way as HealthAddressing/CiliumInternalIP")
+	}
+	hostCN, err := nd.clientset.CiliumV2().CiliumNodes().Get(context.Background(), "host", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Empty(t, hostCN.Spec.IngressAddressing.IPV4, "the local host node must be skipped, not updated")
 }
 
 // TestUpdateManagedCiliumInternalIPs_SingleNodeNoop verifies the standard
@@ -228,7 +245,7 @@ func TestUpdateManagedCiliumInternalIPs_SingleNodeNoop(t *testing.T) {
 	withManagedNames(t, "host", []string{"host"})
 
 	nd, updateCalls := newManagedTestND(t, ciliumNode("host"))
-	ln := localNodeWithCiliumIP("host", "10.0.0.1", "")
+	ln := localNodeWithCiliumIP("host", "10.0.0.1", "", "")
 	nd.updateManagedCiliumInternalIPs(context.Background(), ln)
 
 	require.Zero(t, *updateCalls, "single managed node must not trigger any update")
@@ -241,7 +258,7 @@ func TestUpdateManagedCiliumInternalIPs_NoCiliumIPNoop(t *testing.T) {
 	withManagedNames(t, "host", []string{"host", "pawn-1"})
 
 	nd, updateCalls := newManagedTestND(t, ciliumNode("pawn-1"))
-	ln := localNodeWithCiliumIP("host", "", "") // no cilium internal IP
+	ln := localNodeWithCiliumIP("host", "", "", "") // no cilium internal IP
 	nd.updateManagedCiliumInternalIPs(context.Background(), ln)
 
 	require.Zero(t, *updateCalls, "no source CiliumInternalIP means nothing to propagate")

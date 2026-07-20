@@ -24,14 +24,17 @@ import (
 	"github.com/cilium/cilium/pkg/time"
 )
 
-// updateManagedCiliumInternalIPs propagates this agent's CiliumInternalIP
-// (and HealthAddressing) onto every managed pawn CiliumNode. Constellation
-// runs one cilium-agent per host shared across multiple pawns, so all pawns
-// share the host's single cilium_host interface — they should advertise the
-// same CiliumInternalIP. Without this, `kubectl get ciliumnode` shows an
-// empty CILIUMINTERNALIP column for every pawn and hubble health probes
-// have no source address. Other CiliumNode fields (InternalIP set by
-// perigeos, IPAM.PodCIDRs set by the operator) are preserved.
+// updateManagedCiliumInternalIPs propagates this agent's CiliumInternalIP,
+// HealthAddressing and IngressAddressing onto every managed pawn CiliumNode.
+// Constellation runs one cilium-agent per host shared across multiple
+// pawns, so all pawns share the host's single cilium_host interface, health
+// endpoint and ingress/Envoy proxy — they should advertise the same
+// addresses. Without this, `kubectl get ciliumnode` shows an empty
+// CILIUMINTERNALIP column for every pawn, hubble health probes have no
+// source address, and (when Cilium Ingress/Gateway API is enabled) ingress
+// traffic to a pawn has no resolvable IP. Other CiliumNode fields
+// (InternalIP set by perigeos, IPAM.PodCIDRs set by the operator) are
+// preserved.
 func (n *NodeDiscovery) updateManagedCiliumInternalIPs(ctx context.Context, ln *node.LocalNode) {
 	managed := nodeTypes.GetManagedNames()
 	if len(managed) <= 1 {
@@ -58,11 +61,19 @@ func (n *NodeDiscovery) updateManagedCiliumInternalIPs(ctx context.Context, ln *
 		healthV6 = ip.String()
 	}
 
+	var ingressV4, ingressV6 string
+	if ip := ln.IPv4IngressIP; ip != nil {
+		ingressV4 = ip.String()
+	}
+	if ip := ln.IPv6IngressIP; ip != nil {
+		ingressV6 = ip.String()
+	}
+
 	for _, name := range managed {
 		if name == localName {
 			continue
 		}
-		if err := n.syncManagedCiliumInternalIP(ctx, name, v4, v6, healthV4, healthV6); err != nil {
+		if err := n.syncManagedCiliumInternalIP(ctx, name, v4, v6, healthV4, healthV6, ingressV4, ingressV6); err != nil {
 			n.logger.Warn("Unable to sync CiliumInternalIP onto managed CiliumNode",
 				logfields.NodeName, name,
 				logfields.Error, err,
@@ -71,7 +82,7 @@ func (n *NodeDiscovery) updateManagedCiliumInternalIPs(ctx context.Context, ln *
 	}
 }
 
-func (n *NodeDiscovery) syncManagedCiliumInternalIP(ctx context.Context, name, v4, v6, healthV4, healthV6 string) error {
+func (n *NodeDiscovery) syncManagedCiliumInternalIP(ctx context.Context, name, v4, v6, healthV4, healthV6, ingressV4, ingressV6 string) error {
 	for retry := range maxRetryCount {
 		cn, err := n.k8sGetters.GetCiliumNode(ctx, name)
 		if err != nil {
@@ -111,6 +122,15 @@ func (n *NodeDiscovery) syncManagedCiliumInternalIP(ctx context.Context, name, v
 		}
 		if healthV6 != "" && cn.Spec.HealthAddressing.IPv6 != healthV6 {
 			cn.Spec.HealthAddressing.IPv6 = healthV6
+			changed = true
+		}
+
+		if ingressV4 != "" && cn.Spec.IngressAddressing.IPV4 != ingressV4 {
+			cn.Spec.IngressAddressing.IPV4 = ingressV4
+			changed = true
+		}
+		if ingressV6 != "" && cn.Spec.IngressAddressing.IPV6 != ingressV6 {
+			cn.Spec.IngressAddressing.IPV6 = ingressV6
 			changed = true
 		}
 
