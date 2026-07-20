@@ -32,6 +32,17 @@ import (
 
 type RouteReconcilerMetrics *reconciler.ExpVarMetrics
 
+// routeReconcilerHandleConfig scopes the reconciler's netlink handle to
+// NETLINK_ROUTE only. This reconciler issues nothing but plain route
+// operations (RouteReplace/RouteDel/RouteListFiltered); the unscoped
+// default also opens NETLINK_XFRM and NETLINK_NETFILTER sockets, neither
+// used here, which needlessly fails agent startup if either family is
+// briefly unavailable (e.g. a kernel/module mismatch after a host update,
+// even with routing itself unaffected).
+var routeReconcilerHandleConfig = &safenetlink.HandleConfig{
+	NLFamilies: []int{unix.NETLINK_ROUTE},
+}
+
 func registerReconciler(
 	params reconciler.Params,
 	lc cell.Lifecycle,
@@ -76,15 +87,7 @@ func newOps(
 	lifecycle.Append(cell.Hook{
 		OnStart: func(hc cell.HookContext) error {
 			var err error
-			// This reconciler only issues plain route operations (RouteReplace/
-			// RouteDel/RouteListFiltered), so scope the handle to NETLINK_ROUTE.
-			// The unscoped default also opens NETLINK_XFRM and NETLINK_NETFILTER
-			// sockets, neither used here, which needlessly fails agent startup
-			// if either family is briefly unavailable (e.g. a kernel/module
-			// mismatch after a host update, even with routing unaffected).
-			ops.handle, err = safenetlink.NewHandle(&safenetlink.HandleConfig{
-				NLFamilies: []int{unix.NETLINK_ROUTE},
-			})
+			ops.handle, err = safenetlink.NewHandle(routeReconcilerHandleConfig)
 			if err != nil {
 				return err
 			}
