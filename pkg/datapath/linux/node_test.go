@@ -4,6 +4,7 @@
 package linux
 
 import (
+	"net"
 	"testing"
 
 	"github.com/cilium/hive/hivetest"
@@ -15,13 +16,17 @@ import (
 	"github.com/cilium/cilium/pkg/cidr"
 	"github.com/cilium/cilium/pkg/datapath/config"
 	fakeipsec "github.com/cilium/cilium/pkg/datapath/linux/ipsec/fake"
+	ipsecTypes "github.com/cilium/cilium/pkg/datapath/linux/ipsec/types"
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
 	"github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/kpr"
+	nodemapfake "github.com/cilium/cilium/pkg/maps/nodemap/fake"
 	"github.com/cilium/cilium/pkg/mtu"
 	"github.com/cilium/cilium/pkg/node"
+	nodeaddressing "github.com/cilium/cilium/pkg/node/addressing"
 	fakenode "github.com/cilium/cilium/pkg/node/fake"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/testutils"
 	"github.com/cilium/cilium/pkg/testutils/netns"
 )
@@ -120,4 +125,129 @@ func TestPrivilegedLocalRule(t *testing.T) {
 
 		return nil
 	})
+}
+
+// recordingIPsecAgent wraps fakeipsec.Agent to record DeleteIPsecEndpoint
+// calls, so tests can assert whether IPsec endpoint teardown happened
+// without needing a real IPsec/XFRM setup.
+type recordingIPsecAgent struct {
+	fakeipsec.Agent
+	deletedNodeIDs []uint16
+}
+
+func (a *recordingIPsecAgent) DeleteIPsecEndpoint(nodeID uint16) error {
+	a.deletedNodeIDs = append(a.deletedNodeIDs, nodeID)
+	return nil
+}
+
+// newTestNodeHandler builds a linuxNodeHandler suitable for exercising
+// nodeDelete/deleteIPsec/node-ID bookkeeping directly, without any real
+// netlink or BPF access (a fake node ID map is used instead).
+func newTestNodeHandler(t testing.TB, ipsecAgent ipsecTypes.Agent) *linuxNodeHandler {
+	t.Helper()
+	log := hivetest.Logger(t)
+	lns := node.NewTestLocalNodeStore(node.LocalNode{})
+	handler := newNodeHandler(log, DatapathConfiguration{HostDevice: "host_device"}, nodemapfake.NewFakeNodeMapV2(), kpr.KPRConfig{}, ipsecAgent, fakeipsec.Config{}, lns)
+	// Avoid the nil-func panic in nodeDelete/nodeUpdate; NodeConfigurationChanged
+	// would set this too, but also drives netlink/xfrm side effects we don't
+	// want in this unit test.
+	handler.enableEncapsulation = func(*nodeTypes.Node) bool { return false }
+	return handler
+}
+
+// Constellation: pawn CiliumNodes (perigeos host sharding) intentionally
+// share the local node's CiliumInternalIP, and therefore the same allocated
+// BPF node ID (see getNodeIDForNode's IP-based dedup). Deleting a pawn's
+// CiliumNode must not release that shared ID - the physical host and its
+// other pawns still need it. Regression test for the bug where nodeDelete
+// only special-cased IsLocal() and unconditionally deallocated the ID for
+// every other node, including managed pawns.
+func TestNodeDeleteManagedPawnPreservesSharedNodeID(t *testing.T) {
+	t.Cleanup(func() { nodeTypes.SetManagedNames(nil) })
+	nodeTypes.SetManagedNames([]string{nodeTypes.GetName(), "pawn-2", "pawn-3"})
+
+	handler := newTestNodeHandler(t, &fakeipsec.Agent{})
+
+	sharedIP := net.ParseIP("192.168.50.10")
+	primary := &nodeTypes.Node{
+		Name:        nodeTypes.GetName(),
+		IPAddresses: []nodeTypes.Address{{Type: nodeaddressing.NodeInternalIP, IP: sharedIP}},
+	}
+	pawn := &nodeTypes.Node{
+		Name:        "pawn-2",
+		IPAddresses: []nodeTypes.Address{{Type: nodeaddressing.NodeInternalIP, IP: sharedIP}},
+	}
+
+	id, err := handler.allocateIDForNode(nil, primary)
+	require.NoError(t, err)
+	require.NotZero(t, id)
+
+	require.NoError(t, handler.nodeDelete(pawn))
+
+	require.Equal(t, id, handler.getNodeIDForNode(primary),
+		"deleting a managed pawn's CiliumNode must not deallocate the shared node ID")
+	require.Contains(t, handler.nodeIDsByIPs, sharedIP.String())
+}
+
+// Baseline: deleting a genuinely unmanaged (real remote) node must still
+// deallocate its node ID as before - the fix must not weaken cleanup for
+// nodes that actually leave the cluster.
+func TestNodeDeleteUnmanagedNodeDeallocatesNodeID(t *testing.T) {
+	t.Cleanup(func() { nodeTypes.SetManagedNames(nil) })
+	nodeTypes.SetManagedNames([]string{nodeTypes.GetName()})
+
+	handler := newTestNodeHandler(t, &fakeipsec.Agent{})
+
+	remote := &nodeTypes.Node{
+		Name:        "some-other-cluster-node",
+		IPAddresses: []nodeTypes.Address{{Type: nodeaddressing.NodeInternalIP, IP: net.ParseIP("10.0.0.5")}},
+	}
+
+	id, err := handler.allocateIDForNode(nil, remote)
+	require.NoError(t, err)
+	require.NotZero(t, id)
+
+	require.NoError(t, handler.nodeDelete(remote))
+
+	require.Zero(t, handler.getNodeIDForNode(remote))
+	require.NotContains(t, handler.nodeIDsByIPs, "10.0.0.5")
+}
+
+// Same shared-ID concern for IPsec endpoint teardown: deleteIPsec calls
+// DeleteIPsecEndpoint(nodeID) keyed by the same shared node ID, so it must
+// also skip teardown for managed pawns while still tearing down IPsec state
+// for genuinely departing remote nodes.
+func TestDeleteIPsecSkipsEndpointTeardownForManagedPawn(t *testing.T) {
+	t.Cleanup(func() { nodeTypes.SetManagedNames(nil) })
+	nodeTypes.SetManagedNames([]string{nodeTypes.GetName(), "pawn-2"})
+
+	agent := &recordingIPsecAgent{}
+	handler := newTestNodeHandler(t, agent)
+
+	sharedIP := net.ParseIP("192.168.50.10")
+	primary := &nodeTypes.Node{
+		Name:        nodeTypes.GetName(),
+		IPAddresses: []nodeTypes.Address{{Type: nodeaddressing.NodeInternalIP, IP: sharedIP}},
+	}
+	pawn := &nodeTypes.Node{
+		Name:        "pawn-2",
+		IPAddresses: []nodeTypes.Address{{Type: nodeaddressing.NodeInternalIP, IP: sharedIP}},
+	}
+
+	_, err := handler.allocateIDForNode(nil, primary)
+	require.NoError(t, err)
+
+	require.NoError(t, handler.deleteIPsec(pawn))
+	require.Empty(t, agent.deletedNodeIDs, "deleting a managed pawn must not tear down the shared IPsec endpoint")
+
+	remote := &nodeTypes.Node{
+		Name:        "some-other-cluster-node",
+		IPAddresses: []nodeTypes.Address{{Type: nodeaddressing.NodeInternalIP, IP: net.ParseIP("10.0.0.5")}},
+	}
+	remoteID, err := handler.allocateIDForNode(nil, remote)
+	require.NoError(t, err)
+
+	require.NoError(t, handler.deleteIPsec(remote))
+	require.Equal(t, []uint16{remoteID}, agent.deletedNodeIDs,
+		"deleting a genuinely remote node must still tear down its IPsec endpoint")
 }

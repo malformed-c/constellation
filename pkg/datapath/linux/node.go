@@ -653,8 +653,18 @@ func (n *linuxNodeHandler) nodeDelete(oldNode *nodeTypes.Node) error {
 		}
 	}
 
-	if err := n.deallocateIDForNode(oldNode); err != nil {
-		errs = errors.Join(errs, fmt.Errorf("failed to deallocate old node ID: %w", err))
+	// Managed nodes (perigeos pawns) share the local node's CiliumInternalIP
+	// and therefore the same allocated node ID (see getNodeIDForNode's
+	// IP-based dedup). Deallocating it here would tear down the shared BPF
+	// node-ID mapping for the whole physical host - and free the ID for
+	// reuse by an unrelated remote node - every time any single pawn's
+	// CiliumNode is deleted, even though the host and its other pawns are
+	// still up. That ID is only safe to release when the local node itself
+	// is gone, which never reaches this path (see the IsLocal check above).
+	if !nodeTypes.IsManaged(oldNode.Name) {
+		if err := n.deallocateIDForNode(oldNode); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to deallocate old node ID: %w", err))
+		}
 	}
 
 	return errs
