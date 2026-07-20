@@ -1,7 +1,12 @@
 # Rollout: node-ID/IPsec + IngressAddressing fixes to `constellation-agent`
 
+> **Executed 2026-07-20** — engifire canary, then engix99, both clean, live
+> smoke check passed. See the note in "Mechanism" below on the initContainer
+> image-pinning gap found during execution; everything else in this runbook
+> held as written.
+
 Coordinated-window rollout procedure for two datapath-adjacent fixes, banked
-on `main` and CI-green but not yet deployed:
+on `main` and CI-green, deployed to both physical hosts on 2026-07-20:
 
 - `f1c1b0c290` — `nodeDelete`/`deleteIPsec` no longer tear down the shared
   BPF node-ID/IPsec-endpoint mapping when a *managed pawn's* CiliumNode is
@@ -55,6 +60,21 @@ doesn't let you choose which host goes first, and DaemonSets have no
 rollout-pause. Use `OnDelete` + manual pod deletion instead, to get full
 control over ordering:
 
+> **Known gap** (found during the 2026-07-20 execution): `kubectl set image
+> ds/constellation-agent agent=<digest>` only patches the container literally
+> named `agent`. The three initContainers (`fix-sysctls`, `install-cni`,
+> `resolve-k8s-service-host`) reference a *separate* templated image
+> (`.Values.agent.image.repository`:`.Values.agent.image.tag`, i.e. the
+> floating `:main` tag) that this command does not touch. In practice this
+> pulled two different images per pod (the current `:main` build for the
+> initContainers, the pinned digest for `agent`) and roughly tripled
+> time-to-Ready on the first host (cold pull) — not unsafe, since the
+> initContainers' shell logic doesn't change between builds unless the chart
+> itself changed, but it defeats exact-digest pinning for those three
+> containers and is worth fixing before the next rollout: patch the full
+> `spec.template.spec` (all four container images) in one `kubectl patch`
+> instead of `kubectl set image` on just `agent`.
+
 ```bash
 # 1. Make the template change inert until a pod is manually deleted.
 kubectl patch ds/constellation-agent -n kube-system --type merge \
@@ -78,7 +98,10 @@ kubectl patch ds/constellation-agent -n kube-system --type merge \
 
 (Pod names above are current as of authoring — re-check with
 `kubectl get pods -n kube-system -l app.kubernetes.io/name=constellation-agent -o wide`
-before running, in case they've been recreated since.)
+before running, in case they've been recreated since. As executed
+2026-07-20, `constellation-agent-htjb2`/`-4q44r` were replaced by
+`constellation-agent-xwpf6` (engifire) and `constellation-agent-k78cv`
+(engix99) — those names are now stale too.)
 
 ## Pre-flight gates
 
@@ -117,6 +140,16 @@ pawn on that host (e.g. `engifire-scale-1`):
 4. Watch the CiliumNode self-heal/recreate via Constellation's own
    node-discovery loop (`kubectl get ciliumnode engifire-scale-1 -w`).
 5. Confirm zero pod restarts or connectivity blips on that pawn throughout.
+
+> **Executed 2026-07-20**, against `engix99-e2e-2` (zero pods scheduled
+> there — a safer target than a workload-bearing pawn). Shared entry `0x60f9`
+> (`192.168.100.200`, `10.0.95.73`) recorded before the delete, unchanged
+> immediately after — the fix held. CiliumNode self-healed within ~10s with
+> `InternalIP` restored; `CiliumInternalIP` hadn't re-fanned in within a
+> ~4min observation window (not chased further — no pods depended on it
+> there, node stayed `Ready` throughout, and the fanout is a periodic
+> reconcile rather than a tight loop). Worth a longer watch next time if the
+> exact fanout latency matters.
 
 ## Rollback
 
