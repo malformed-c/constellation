@@ -61,68 +61,11 @@ spec:
           volumeMounts:
             - name: cni-path
               mountPath: /host-cni-bin
-        # k8sServiceHost is a single value shared by every node running this
-        # DaemonSet, but whether the API server is reachable on THIS node's
-        # loopback is inherently a per-node runtime fact (true for a
-        # control-plane-colocated node, false for a remote one). This pod is
-        # hostNetwork:true, so 127.0.0.1 here is the real host loopback:
-        # probe it directly and prefer it over the shared value when
-        # something's actually listening there.
-        - name: resolve-k8s-service-host
-          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
-          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
-          # Probe the SAME port the main container's KUBERNETES_SERVICE_PORT
-          # env var below actually uses (not a separately-templated literal)
-          # so detection port == connect port always holds, even if this
-          # deployment's k8sServicePort value has drifted from the live API
-          # server's real port for any reason.
-          env:
-            - name: KUBERNETES_SERVICE_PORT
-              value: {{ .Values.k8sServicePort | quote }}
-          command:
-            - /bin/bash
-            - -c
-            - |
-              set -e
-              # Bounded retry, not a single probe: on a fresh reboot this
-              # initContainer and a locally-colocated API server can start
-              # concurrently, so a one-shot check can lose that race and
-              # wrongly fall through to the remote value (recreating the
-              # exact crashloop this is meant to fix, just moved to
-              # post-reboot). Poll for up to ~75s before giving up.
-              host=""
-              for _ in $(seq 1 25); do
-                if timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/${KUBERNETES_SERVICE_PORT}" 2>/dev/null; then
-                  host="127.0.0.1"
-                  break
-                fi
-                sleep 3
-              done
-              if [ -z "$host" ]; then
-                host="{{ include "constellation.k8sServiceHost" . }}"
-              fi
-              printf '%s' "$host" > /run/constellation/k8s-service-host
-          volumeMounts:
-            - name: k8s-service-host
-              mountPath: /run/constellation
       containers:
         - name: agent
           image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
-          # Prefer the resolve-k8s-service-host initContainer's result (set
-          # only when it found the API server reachable on THIS node's own
-          # loopback) over the KUBERNETES_SERVICE_HOST env var below, which
-          # stays as the shared fallback for every other node.
-          command:
-            - /bin/sh
-            - -c
-            - |
-              host="$(cat /run/constellation/k8s-service-host 2>/dev/null || true)"
-              if [ -n "$host" ]; then
-                export KUBERNETES_SERVICE_HOST="$host"
-              fi
-              exec /usr/bin/cilium-agent "$@"
-            - --
+          command: ["/usr/bin/cilium-agent"]
           args:
             - --routing-mode=tunnel
             - --kube-proxy-replacement=true
@@ -132,6 +75,9 @@ spec:
             - --bpf-lb-sock-hostns-only=true
             {{- if .Values.managedPawnsSelector }}
             - --managed-pawns-selector={{ .Values.managedPawnsSelector }}
+            {{- end }}
+            {{- range .Values.k8sAPIServerURLs }}
+            - --k8s-api-server-urls={{ . }}
             {{- end }}
             {{- if gt (int .Values.mtu) 0 }}
             - --mtu={{ .Values.mtu }}
@@ -200,14 +146,9 @@ spec:
             - name: host-netns
               mountPath: /var/run/netns
               mountPropagation: HostToContainer
-            - name: k8s-service-host
-              mountPath: /run/constellation
-              readOnly: true
           resources:
             {{- toYaml .Values.agent.resources | nindent 12 }}
       volumes:
-        - name: k8s-service-host
-          emptyDir: {}
         - name: cilium-run
           hostPath:
             path: /var/run/cilium

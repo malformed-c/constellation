@@ -18,6 +18,17 @@ namespace: kube-system
 k8sServiceHost: ""
 k8sServicePort: "6443"
 
+# Optional list of additional API server URLs (scheme://host:port) for
+# clusters where the control plane binds several interfaces (e.g. a
+# control-plane-colocated node reachable on 127.0.0.1 as well as a shared
+# LAN address reachable from every node). Wires into Cilium's own built-in
+# --k8s-api-server-urls: agent picks one at random, retries the others on
+# connection failure, and keeps re-checking /readyz at runtime - so this
+# needs no per-node detection logic of its own, unlike k8sServiceHost above
+# which is a single value used as the KUBERNETES_SERVICE_HOST fallback.
+#   --set k8sAPIServerURLs[0]=https://192.168.100.200:6443 --set k8sAPIServerURLs[1]=https://192.168.50.1:6443
+k8sAPIServerURLs: []
+
 # Agent runs on nodes matching nodeSelector, and (for the Constellation fork's
 # sharded datapath) only MANAGES pawn nodes carrying managedPawnsSelector. Set
 # managedPawnsSelector to "" for a stock single-datapath cluster (no sharding).
