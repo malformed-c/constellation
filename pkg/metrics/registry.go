@@ -107,6 +107,10 @@ func (reg *Registry) AddServerRuntimeHooks(serverId string, tlsConfigPromise TLS
 
 			ln, err := listenConfig.Listen(ctx, "tcp", reg.params.Config.PrometheusServeAddr)
 			if err != nil {
+				reg.params.Logger.Error("Failed to listen for prometheus metrics",
+					logfields.Address, reg.params.Config.PrometheusServeAddr,
+					logfields.Error, err,
+				)
 				return err
 			}
 
@@ -135,7 +139,7 @@ func (reg *Registry) AddServerRuntimeHooks(serverId string, tlsConfigPromise TLS
 				return err
 			}
 			return nil
-		}, job.WithShutdown()),
+		}),
 	)
 }
 
