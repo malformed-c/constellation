@@ -105,12 +105,11 @@ func (reg *Registry) AddServerRuntimeHooks(serverId string, tlsConfigPromise TLS
 
 			ln, err := listenConfig.Listen(ctx, "tcp", reg.params.Config.PrometheusServeAddr)
 			if err != nil {
-				reg.params.Logger.Error("Failed to listen for prometheus metrics, shutting down",
+				reg.params.Logger.Error("Failed to listen for prometheus metrics",
 					logfields.Address, reg.params.Config.PrometheusServeAddr,
 					logfields.Error, err,
 				)
-				reg.params.Shutdowner.Shutdown(hive.ShutdownWithError(err))
-				return nil
+				return err
 			}
 
 			var serveFn func() error
@@ -128,7 +127,7 @@ func (reg *Registry) AddServerRuntimeHooks(serverId string, tlsConfigPromise TLS
 			}
 
 			if err := serveFn(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				reg.params.Shutdowner.Shutdown(hive.ShutdownWithError(err))
+				return err
 			}
 			return nil
 		}))
