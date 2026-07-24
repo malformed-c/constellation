@@ -131,6 +131,55 @@ func TestAgentDaemonSet_K8sAPIServerURLsEmpty(t *testing.T) {
 	require.Equal(t, "6443", portEnv["value"])
 }
 
+// TestAgentDaemonSet_K8sServiceHostRequirement covers constellation.k8sServiceHost's
+// three cases: neither value set must fail the render (no way to reach the API
+// server at all); k8sServiceHost set is unaffected (existing behavior); and
+// k8sAPIServerURLs set without k8sServiceHost must NOT fail, but still needs a
+// non-empty KUBERNETES_SERVICE_HOST placeholder - createConfig's
+// k8sAPIServerURLs path calls rest.InClusterConfig() first (for the pod's
+// token/CA) before overriding .Host, and InClusterConfig() rejects an empty
+// KUBERNETES_SERVICE_HOST outright, so a genuinely empty value would break
+// bootstrap even with the URL list configured.
+func TestAgentDaemonSet_K8sServiceHostRequirement(t *testing.T) {
+	t.Run("neither set fails", func(t *testing.T) {
+		if _, err := exec.LookPath("helm"); err != nil {
+			t.Skip("helm not available")
+		}
+		cmd := exec.Command("helm", "template", "constellation", ".")
+		out, err := cmd.CombinedOutput()
+		require.Error(t, err)
+		require.Contains(t, string(out), "k8sServiceHost is required")
+	})
+
+	t.Run("k8sAPIServerURLs set without k8sServiceHost succeeds with a placeholder", func(t *testing.T) {
+		if _, err := exec.LookPath("helm"); err != nil {
+			t.Skip("helm not available")
+		}
+		cmd := exec.Command("helm", "template", "constellation", ".",
+			"--set", "k8sAPIServerURLs[0]=https://192.168.100.200:6443")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "helm template failed: %s", out)
+
+		dec := yaml.NewDecoder(strings.NewReader(string(out)))
+		var spec map[string]any
+		for {
+			var doc map[string]any
+			if derr := dec.Decode(&doc); derr != nil {
+				break
+			}
+			if doc["kind"] == "DaemonSet" {
+				spec = doc["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+			}
+		}
+		require.NotNil(t, spec)
+
+		agent := findByName(t, spec["containers"].([]any), "agent")
+		env := agent["env"].([]any)
+		hostEnv := findByName(t, env, "KUBERNETES_SERVICE_HOST")
+		require.NotEmpty(t, hostEnv["value"], "must not render an empty KUBERNETES_SERVICE_HOST - InClusterConfig rejects that outright")
+	})
+}
+
 // TestAgentDaemonSet_K8sAPIServerURLs verifies that setting the
 // k8sAPIServerURLs list renders one --k8s-api-server-urls arg per entry, in
 // order, alongside (not instead of) the existing static env vars - Cilium's
