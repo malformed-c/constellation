@@ -166,3 +166,18 @@ func indexOf(s []string, v string) int {
 	}
 	return -1
 }
+
+// TestAgentDaemonSet_ArchNodeSelector verifies the agent's nodeSelector
+// excludes non-amd64 nodes by construction (kubernetes.io/arch: amd64),
+// rather than via a maintained list of excluded node names - an arm64 node
+// (no working Cilium/BPF datapath today) is excluded automatically, no
+// chart update needed when a new one joins the cluster. Also checks the
+// nodeAffinity/excludeNodeNames mechanism this replaced stays gone.
+func TestAgentDaemonSet_ArchNodeSelector(t *testing.T) {
+	spec := renderAgentDaemonSet(t)
+
+	nodeSelector, _ := spec["nodeSelector"].(map[string]any)
+	require.Equal(t, "amd64", nodeSelector["kubernetes.io/arch"])
+
+	require.Nil(t, spec["affinity"], "node exclusion must be via nodeSelector, not a nodeAffinity NotIn list")
+}

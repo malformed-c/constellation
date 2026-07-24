@@ -32,8 +32,13 @@ k8sAPIServerURLs: []
 # Agent runs on nodes matching nodeSelector, and (for the Constellation fork's
 # sharded datapath) only MANAGES pawn nodes carrying managedPawnsSelector. Set
 # managedPawnsSelector to "" for a stock single-datapath cluster (no sharding).
+# kubernetes.io/arch is here (not just a deploy-time --set) so an arm64 node
+# is excluded by construction, not by remembering to list it - the Cilium/BPF
+# datapath doesn't run there today, so there's nothing "primary" enough to
+# override this with.
 nodeSelector:
   periapsis.io/primary: "true"
+  kubernetes.io/arch: amd64
 managedPawnsSelector: periapsis.io/host
 
 # Optional cilium cluster identity (clustermesh). 0 / "" = unset.
