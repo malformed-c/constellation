@@ -6,6 +6,7 @@ package nodediscovery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 
@@ -214,12 +215,26 @@ func (n *NodeDiscovery) UpdateCiliumNodeResource() {
 		logging.Fatal(n.logger, "Could not retrieve the local node object")
 	}
 
-	n.updateCiliumNodeResource(context.TODO(), &ln)
+	if err := n.updateCiliumNodeResource(context.TODO(), &ln); err != nil {
+		logging.Fatal(n.logger, "Could not create or update CiliumNode resource", logfields.Error, err, logfields.Retries, maxRetryCount)
+	}
 }
 
-func (n *NodeDiscovery) updateCiliumNodeResource(ctx context.Context, ln *node.LocalNode) {
+// TryUpdateCiliumNodeResource is UpdateCiliumNodeResource without the
+// logging.Fatal on exhaustion - callers that already propagate startup
+// errors (e.g. a Hive OnStart hook) should use this instead, so a
+// transient CiliumNode conflict doesn't take down the whole agent.
+func (n *NodeDiscovery) TryUpdateCiliumNodeResource(ctx context.Context) error {
+	ln, err := n.localNodeStore.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("could not retrieve the local node object: %w", err)
+	}
+	return n.updateCiliumNodeResource(ctx, &ln)
+}
+
+func (n *NodeDiscovery) updateCiliumNodeResource(ctx context.Context, ln *node.LocalNode) error {
 	if !option.Config.AutoCreateCiliumNodeResource {
-		return
+		return nil
 	}
 
 	n.logger.Info(
@@ -234,7 +249,20 @@ func (n *NodeDiscovery) updateCiliumNodeResource(ctx context.Context, ln *node.L
 		performUpdate := true
 		if performGet {
 			var err error
-			nodeResource, err = n.k8sGetters.GetCiliumNode(ctx, nodeTypes.GetName())
+			if retryCount == 0 {
+				// First attempt: the cached informer read is fine, and
+				// avoids an apiserver round trip in the common
+				// uncontested case.
+				nodeResource, err = n.k8sGetters.GetCiliumNode(ctx, nodeTypes.GetName())
+			} else {
+				// Retrying after a conflict: the informer cache may not
+				// yet reflect the write that caused it - including our
+				// OWN just-made write, since nothing guarantees the
+				// local watch has caught up with it yet. A cached read
+				// can reproduce the identical conflict forever instead
+				// of resolving it, so go straight to the apiserver.
+				nodeResource, err = n.clientset.CiliumV2().CiliumNodes().Get(ctx, nodeTypes.GetName(), metav1.GetOptions{})
+			}
 			if err != nil {
 				n.logger.Info(
 					"Unable to get CiliumNode resource",
@@ -275,7 +303,7 @@ func (n *NodeDiscovery) updateCiliumNodeResource(ctx context.Context, ln *node.L
 				continue
 			} else {
 				n.updateManagedCiliumInternalIPs(ctx, ln)
-				return
+				return nil
 			}
 		} else {
 			if _, err := n.clientset.CiliumV2().CiliumNodes().Create(ctx, nodeResource, metav1.CreateOptions{}); err != nil {
@@ -287,11 +315,11 @@ func (n *NodeDiscovery) updateCiliumNodeResource(ctx context.Context, ln *node.L
 			} else {
 				n.logger.Info("Successfully created CiliumNode resource")
 				n.updateManagedCiliumInternalIPs(ctx, ln)
-				return
+				return nil
 			}
 		}
 	}
-	logging.Fatal(n.logger, "Could not create or update CiliumNode resource", logfields.Error, lastErr, logfields.Retries, maxRetryCount)
+	return lastErr
 }
 
 func (n *NodeDiscovery) mutateNodeResource(ctx context.Context, nodeResource *ciliumv2.CiliumNode, ln *node.LocalNode) error {

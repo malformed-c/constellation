@@ -157,8 +157,14 @@ func configureDaemon(ctx context.Context, params daemonParams) error {
 			params.DaemonConfig.IPAM == ipamOption.IPAMMultiPool ||
 			params.DaemonConfig.IPAM == ipamOption.IPAMENI {
 			// Create the CiliumNode custom resource. This call will block until
-			// the custom resource has been created
-			params.NodeDiscovery.UpdateCiliumNodeResource()
+			// the custom resource has been created. Propagate a failure as a
+			// normal startup error instead of a direct Fatal, so a transient
+			// CiliumNode update conflict fails this start hook (and gets
+			// retried the way any other start-hook failure would) rather
+			// than hard-killing the whole agent process.
+			if err := params.NodeDiscovery.TryUpdateCiliumNodeResource(ctx); err != nil {
+				return fmt.Errorf("could not create or update CiliumNode resource: %w", err)
+			}
 		}
 
 		if err := params.LocalNodeStore.WaitForNodeInformation(ctx); err != nil {
