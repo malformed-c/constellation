@@ -710,10 +710,23 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 			logOverride, overridden,
 			logReachable, true,
 		)
-		m.ipcache.SetTunnelEndpointOverride(
-			nodeIP.AsSlice(),
-			overridden.AsSlice(),
-		)
+		// Do NOT register the ipcache rewrite for a node that runs on this
+		// host. IPCache.Upsert applies these overrides to every entry whose
+		// hostIP matches, and a local pod's entry carries this host's own IP
+		// as its hostIP. Rewriting it to the override address makes the entry
+		// stop matching "this is my own node", so the datapath classifies a
+		// local pod as remote and gives it tunnelendpoint=<this host> with the
+		// hastunnel flag - a VXLAN hairpin back to the machine the packet is
+		// already on. Managed nodes (perigeos pawns) share this host's IP, so
+		// IsManaged is the right predicate; it is the same reasoning already
+		// applied to cidrTunnelIP below. The override still has to reach
+		// nodeIP, because REMOTE agents legitimately tunnel to us there.
+		if !nodeTypes.IsManaged(n.Name) {
+			m.ipcache.SetTunnelEndpointOverride(
+				nodeIP.AsSlice(),
+				overridden.AsSlice(),
+			)
+		}
 		nodeIP = overridden
 	} else if m.tunnelEndpointOverrides != nil {
 		if candidate, ok := m.tunnelEndpointOverrides[n.Name]; ok {
