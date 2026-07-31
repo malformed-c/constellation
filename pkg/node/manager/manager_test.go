@@ -37,6 +37,7 @@ import (
 	ipcacheTypes "github.com/cilium/cilium/pkg/ipcache/types"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/labelsfilter"
+	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/node/addressing"
 	fakenode "github.com/cilium/cilium/pkg/node/fake"
@@ -60,6 +61,9 @@ func testClusterSizeDependantInterval(interval time.Duration) time.Duration {
 
 type ipcacheMock struct {
 	events chan nodeEvent
+
+	overrideMu      lock.Mutex
+	tunnelOverrides [][2]string
 }
 
 func newIPcacheMock() *ipcacheMock {
@@ -127,7 +131,19 @@ func (i *ipcacheMock) RemoveMetadataBatch(updates ...ipcache.MU) (revision uint6
 	return 0
 }
 
-func (i *ipcacheMock) SetTunnelEndpointOverride(originalIP, overrideIP net.IP) {}
+func (i *ipcacheMock) SetTunnelEndpointOverride(originalIP, overrideIP net.IP) {
+	i.overrideMu.Lock()
+	defer i.overrideMu.Unlock()
+	i.tunnelOverrides = append(i.tunnelOverrides, [2]string{originalIP.String(), overrideIP.String()})
+}
+
+// registeredTunnelOverrides returns the (originalIP, overrideIP) pairs that
+// were registered via SetTunnelEndpointOverride.
+func (i *ipcacheMock) registeredTunnelOverrides() [][2]string {
+	i.overrideMu.Lock()
+	defer i.overrideMu.Unlock()
+	return append([][2]string(nil), i.tunnelOverrides...)
+}
 
 type signalNodeHandler struct {
 	EnableNodeAddEvent                    bool
@@ -1591,4 +1607,81 @@ func TestNodeTableInitializersCompleteInEitherOrder(t *testing.T) {
 			require.True(t, initialized)
 		})
 	}
+}
+
+// TestNodeUpdated_TunnelEndpointOverrideSkippedForManagedNodes is a regression
+// test for the hastunnel ipcache defect observed live on engix99: local pods
+// were getting /32 ipcache entries with tunnelendpoint=<this host> and the
+// hastunnel flag - a VXLAN hairpin back to the machine the packet is already
+// on - while pods restored from a previous agent correctly got 0.0.0.0.
+//
+// Mechanism: IPCache.Upsert rewrites any entry whose hostIP matches a
+// registered override. A local pod's entry carries this host's own IP as its
+// hostIP, so registering an override for a node that runs on THIS host makes
+// local entries stop matching "this is my own node" and be classified remote.
+// Managed nodes (perigeos pawns) share this host's IP, so the override must
+// not be registered for them - while remote nodes must still get one, because
+// other agents legitimately tunnel to us at the override address.
+func TestNodeUpdated_TunnelEndpointOverrideSkippedForManagedNodes(t *testing.T) {
+	logger := hivetest.Logger(t)
+
+	// isLocallyReachable() consults real interfaces; stub it so the override
+	// is considered usable regardless of the host running the test.
+	prev := connectedPrefixesFunc
+	connectedPrefixesFunc = func() []netip.Prefix {
+		return []netip.Prefix{netip.MustParsePrefix("192.168.50.0/24")}
+	}
+	t.Cleanup(func() { connectedPrefixesFunc = prev })
+
+	// "self" is this host; "pawn-1" is a managed pawn sharing its IP;
+	// "remote" is a genuinely different machine.
+	nodeTypes.SetManagedNames([]string{"self", "pawn-1"})
+	t.Cleanup(func() { nodeTypes.SetManagedNames(nil) })
+
+	ipcacheMock := newIPcacheMock()
+	h, _ := cell.NewSimpleHealth()
+	mngr, err := New(logger,
+		&option.DaemonConfig{
+			TunnelEndpointOverrides: "self=192.168.50.1,pawn-1=192.168.50.1,remote=192.168.50.9",
+		},
+		cmtypes.DefaultClusterInfo,
+		tunnel.Config{},
+		ipcacheMock,
+		NewNodeMetrics(),
+		h,
+		nil,
+		nil,
+		nil,
+		fakewireguard.Config{},
+		node.NewTestLocalNodeStore(node.LocalNode{}),
+		nil,
+		testClusterSizeDependantInterval,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { mngr.Stop(context.Background()) })
+
+	mkNode := func(name, ip string) nodeTypes.Node {
+		return nodeTypes.Node{
+			Name: name, Cluster: "c1", Source: source.CustomResource,
+			IPAddresses: []nodeTypes.Address{{Type: addressing.NodeInternalIP, IP: net.ParseIP(ip)}},
+		}
+	}
+
+	// Both managed nodes live on this host and share its IP.
+	mngr.NodeUpdated(mkNode("self", "192.168.100.200"))
+	mngr.NodeUpdated(mkNode("pawn-1", "192.168.100.200"))
+
+	got := ipcacheMock.registeredTunnelOverrides()
+	require.Empty(t, got,
+		"no ipcache tunnel-endpoint override may be registered for a node running on THIS host - "+
+			"doing so rewrites local pods' hostIP and makes the datapath treat them as remote "+
+			"(tunnelendpoint=<this host>, hastunnel), hairpinning them through VXLAN. got=%v", got)
+
+	// A genuinely remote node must still get its override - other agents
+	// reach us, and we reach them, at the override address.
+	mngr.NodeUpdated(mkNode("remote", "10.0.0.9"))
+
+	got = ipcacheMock.registeredTunnelOverrides()
+	require.Len(t, got, 1, "a remote node's override must still be registered")
+	require.Equal(t, [2]string{"10.0.0.9", "192.168.50.9"}, got[0])
 }
