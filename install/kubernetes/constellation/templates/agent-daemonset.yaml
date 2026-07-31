@@ -33,7 +33,7 @@ spec:
         # kernel drop BPF-redirected packets (they arrive on an unexpected path).
         # Effective rp_filter is max(all, interface), so zero both default + wildcard.
         - name: fix-sysctls
-          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          image: "{{ include "constellation.agentImage" . }}"
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           command:
             - sh
@@ -52,7 +52,7 @@ spec:
         # Install the cilium-cni binary onto the host (perigeos writes the CNI
         # conflist itself under /etc/cni/net.d/constellation).
         - name: install-cni
-          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          image: "{{ include "constellation.agentImage" . }}"
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           command:
             - sh
@@ -63,7 +63,7 @@ spec:
               mountPath: /host-cni-bin
       containers:
         - name: agent
-          image: "{{ .Values.agent.image.repository }}:{{ .Values.agent.image.tag }}"
+          image: "{{ include "constellation.agentImage" . }}"
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           command: ["/usr/bin/cilium-agent"]
           args:

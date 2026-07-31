@@ -207,6 +207,32 @@ func TestAgentDaemonSet_K8sAPIServerURLs(t *testing.T) {
 	require.Equal(t, "192.168.50.1", hostEnv["value"])
 }
 
+// TestAgentDaemonSet_ImageDigestPin verifies agent.image.digest, when set,
+// overrides agent.image.tag for every agent-image container (both
+// initContainers and the main container) - a deploy pinned to a digest must
+// not have any container silently fall back to the floating tag.
+func TestAgentDaemonSet_ImageDigestPin(t *testing.T) {
+	const digest = "sha256:f0802317aa9d6fe1b3a748d2895c3df5f090c0b37b83cb51678a393498d51123"
+
+	t.Run("digest set overrides tag everywhere", func(t *testing.T) {
+		spec := renderAgentDaemonSet(t, "--set", "agent.image.digest="+digest)
+
+		want := "ghcr.io/malformed-c/constellation-agent@" + digest
+		for _, ic := range spec["initContainers"].([]any) {
+			m := ic.(map[string]any)
+			require.Equal(t, want, m["image"], "initContainer %q must use the pinned digest", m["name"])
+		}
+		agent := findByName(t, spec["containers"].([]any), "agent")
+		require.Equal(t, want, agent["image"])
+	})
+
+	t.Run("digest unset falls back to tag", func(t *testing.T) {
+		spec := renderAgentDaemonSet(t)
+		agent := findByName(t, spec["containers"].([]any), "agent")
+		require.Equal(t, "ghcr.io/malformed-c/constellation-agent:main", agent["image"])
+	})
+}
+
 func indexOf(s []string, v string) int {
 	for i, x := range s {
 		if x == v {
