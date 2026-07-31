@@ -207,6 +207,14 @@ func (n *NodeDiscovery) updateLocalNode(ctx context.Context, ln *node.LocalNode)
 // local node. This function can be safely executed only before starting the
 // discovery logic through StartDiscovery(), as otherwise possibly racing
 // against concurrent updates triggered by the LocalNodeStore observer.
+//
+// Correction to a note added alongside TryUpdateCiliumNodeResource below:
+// in the current call graph (daemon/cmd/daemon.go's configureDaemon) this
+// isn't just a documented precondition but an actual guarantee - the
+// daemon start hook calls TryUpdateCiliumNodeResource and StartDiscovery
+// synchronously, in that order, on the same goroutine, with no concurrent
+// caller of either in between. The two paths don't race today; keep them
+// in that order if this function is ever called from somewhere else.
 func (n *NodeDiscovery) UpdateCiliumNodeResource() {
 	// UpdateCiliumNodeResource is executed by the daemon start hook, and
 	// at that point we are guaranteed that the local node has already
