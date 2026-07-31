@@ -708,6 +708,121 @@ func Test_clientMultipleAPIServersFailedHeartbeat(t *testing.T) {
 	require.NoError(t, h.Stop(tlog, ctx))
 }
 
+// Test_clientMultipleAPIServersServiceHeartbeatFallback is a regression test
+// for the periapsis engix99 incident of 2026-07-31: once switched over to
+// the kube-apiserver service address, the manager could never rotate back
+// to a directly configured API server URL, on the assumption that Cilium's
+// own datapath load balancing would route around a dead kube-apiserver.
+// That assumption doesn't hold if the service has no healthy backends at
+// all - there's nothing to load-balance to - and the agent was stuck
+// retrying the unreachable service address indefinitely. This verifies
+// that a heartbeat failure while connected to the service address now
+// re-arms manual rotation, so the agent falls back to the originally
+// configured API server URLs instead of latching permanently.
+func Test_clientMultipleAPIServersServiceHeartbeatFallback(t *testing.T) {
+	var requests lock.Map[string, *http.Request]
+	getRequest := func(k string) *http.Request {
+		v, _ := requests.Load(k)
+		return v
+	}
+	apiStateFile, err := os.CreateTemp("", "kubeapi_state")
+	require.NoError(t, err)
+	defer apiStateFile.Close()
+	K8sAPIServerFilePath = apiStateFile.Name()
+
+	servers := make([]*httptest.Server, 3)
+	for i := range servers {
+		servers[i] = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Store(r.URL.Path, r)
+
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/version":
+				w.Write([]byte(`{
+			       "major": "1",
+			       "minor": "99"
+			}`))
+			default:
+				w.Write([]byte("{}"))
+			}
+		}))
+	}
+	// servers[0] and servers[1] are the originally configured API server
+	// URLs; both stay up for the whole test, representing the
+	// last-known-good fallback the agent should return to.
+	servers[0].Start()
+	defer servers[0].Close()
+	servers[1].Start()
+	defer servers[1].Close()
+
+	var (
+		clientset Clientset
+		mgr       *restConfigManager
+	)
+	h := hive.New(
+		Cell,
+		cell.Provide(
+			loadbalancer.NewFrontendsTable, statedb.RWTable[*loadbalancer.Frontend].ToTable,
+			func() loadbalancer.Config { return loadbalancer.DefaultConfig },
+		),
+		cell.Invoke(func(c Clientset, m *restConfigManager) { clientset = c; mgr = m }),
+	)
+
+	flags := pflag.NewFlagSet("", pflag.ContinueOnError)
+	h.RegisterFlags(flags)
+	urls := []string{servers[0].URL, servers[1].URL}
+	flags.Set(option.K8sAPIServerURLs, strings.Join(urls, ","))
+	flags.Set(option.K8sHeartbeatTimeout, "1s")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	tlog := hivetest.Logger(t)
+	require.NoError(t, h.Start(tlog, ctx))
+	defer func() { require.NoError(t, h.Stop(tlog, ctx)) }()
+
+	// Check that we see the connection probe and version check.
+	require.NotNil(t, getRequest("/api/v1/namespaces/kube-system"))
+	require.NotNil(t, getRequest("/version"))
+
+	// Switch over to the service address, as would happen once the agent
+	// observes the default/kubernetes service frontend - no Endpoints
+	// given, mirroring the real case where the backing EndpointSlice has
+	// gone empty (see updateMappings: apiServerURLs is left untouched
+	// when there are no endpoints to replace it with).
+	servers[2].Start()
+	mapping := K8sServiceEndpointMapping{Service: servers[2].URL}
+	mgr.updateMappings(mapping)
+	require.False(t, mgr.canRotateAPIServerURL(),
+		"manual rotation must be gated off immediately after switching to the service address")
+
+	require.NoError(t, testutils.WaitUntil(func() bool {
+		_, err = clientset.CoreV1().Pods("test").Get(context.TODO(), "pod-via-service", metav1.GetOptions{})
+		return err == nil
+	}, 5*time.Second))
+	require.NotNil(t, getRequest("/api/v1/namespaces/test/pods/pod-via-service"),
+		"request must have gone through the service address")
+
+	// The service address now has nothing to route to (e.g. the
+	// EndpointSlice went empty) - simulate that by taking it down
+	// entirely, and reset the heartbeat's success window so it doesn't
+	// skip the next check.
+	servers[2].Close()
+	k8smetrics.LastSuccessInteraction.Reset()
+
+	// The heartbeat should detect the failure, re-arm rotation, and fall
+	// back to one of the originally configured (still-healthy) API
+	// server URLs - not stay latched onto the now-dead service address.
+	require.NoError(t, testutils.WaitUntil(func() bool {
+		_, err = clientset.CoreV1().Pods("test").Get(context.TODO(), "pod-after-fallback", metav1.GetOptions{})
+		return err == nil
+	}, 5*time.Second))
+	require.NotNil(t, getRequest("/api/v1/namespaces/test/pods/pod-after-fallback"),
+		"request must have gone through after falling back from the dead service address")
+	require.True(t, mgr.canRotateAPIServerURL(),
+		"manual rotation must be re-armed after falling back from the service address")
+}
+
 func BenchmarkIsConnReady(b *testing.B) {
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

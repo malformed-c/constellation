@@ -93,6 +93,30 @@ func (r *restConfigManager) canRotateAPIServerURL() bool {
 	return len(r.apiServerURLs) > 1 && !r.isConnectedToService
 }
 
+// disconnectFromService un-latches isConnectedToService, so a subsequent
+// canRotateAPIServerURL call can return true again. Without this, once
+// isConnectedToService is set the manager can never manually rotate away
+// from the kube-apiserver service address again - fine as long as the
+// datapath's own load balancing can route around a dead kube-apiserver,
+// but that assumption breaks if the service has no healthy backends at
+// all: there's nothing for the datapath to load-balance to, and the
+// agent needs a way back to the last-known-good API server URLs (either
+// the original configuration, or the endpoints from the last successful
+// service update) instead of retrying an address it cannot route
+// through. Intended to be called from a connectivity-failure path (e.g.
+// the heartbeat's onFailure, see cell.go's rotateAPIServer) immediately
+// before checking canRotateAPIServerURL, not on every failed request.
+func (r *restConfigManager) disconnectFromService() {
+	r.Lock()
+	wasConnected := r.isConnectedToService
+	r.isConnectedToService = false
+	r.Unlock()
+
+	if wasConnected {
+		r.log.Warn("Lost connectivity to kubeapi service address, falling back to manual API server rotation")
+	}
+}
+
 func restConfigManagerInit(cfg Config, name string, log *slog.Logger) (*restConfigManager, error) {
 	var err error
 	manager := restConfigManager{
