@@ -72,6 +72,12 @@ agent:
   image:
     repository: ghcr.io/malformed-c/constellation-agent
     tag: main
+    # Pin to a specific amd64 manifest digest (sha256:...) instead of
+    # tracking tag above. Takes precedence over tag when set. Use this
+    # for any deploy where a stuck/slow pull must not silently retry
+    # against a newer digest that a moving tag started pointing to
+    # mid-pull.
+    digest: ""
     pullPolicy: Always
   resources:
     requests:

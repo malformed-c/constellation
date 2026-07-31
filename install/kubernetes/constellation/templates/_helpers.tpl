@@ -24,3 +24,15 @@ kubernetes.default.svc
 {{- fail "k8sServiceHost is required when k8sAPIServerURLs is not set (the API server VIP), e.g. --set k8sServiceHost=192.168.50.1" -}}
 {{- end -}}
 {{- end -}}
+
+{{/* Agent image reference: pin to agent.image.digest when set (sha256:...),
+     otherwise track agent.image.tag. A digest pin makes a deploy immune to
+     the tag moving to a new digest mid-pull, which turns a slow/stuck pull
+     into a retry loop against a moving target instead of converging. */}}
+{{- define "constellation.agentImage" -}}
+{{- if .Values.agent.image.digest -}}
+{{- .Values.agent.image.repository -}}@{{- .Values.agent.image.digest -}}
+{{- else -}}
+{{- .Values.agent.image.repository -}}:{{- .Values.agent.image.tag -}}
+{{- end -}}
+{{- end -}}
