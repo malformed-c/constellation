@@ -287,6 +287,12 @@ func (c *compositeClientset) startHeartbeat() {
 	}
 
 	rotateAPIServer := func() {
+		// A heartbeat failure while connected to the kube-apiserver service
+		// address means the datapath has nothing to load-balance to (see
+		// disconnectFromService's doc comment) - re-arm manual rotation so
+		// the fallback below can actually run instead of being permanently
+		// gated off by the earlier switch to the service address.
+		c.restConfigManager.disconnectFromService()
 		if c.restConfigManager.canRotateAPIServerURL() {
 			c.restConfigManager.rotateAPIServerURL()
 		}
