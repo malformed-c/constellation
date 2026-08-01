@@ -34,11 +34,31 @@ jobs:
               - 'Makefile*'
               - '!**/*.md'
 
+  # Run on both architectures: the BPF build pulls in host headers and
+  # arch-dependent toolchain behaviour, so it is the check most likely to
+  # differ between amd64 and arm64 - which matters here because the agent
+  # image ships arm64 while the chart currently excludes arm64 nodes via
+  # nodeSelector (kubernetes.io/arch: amd64).
+  #
+  # NOTE: this step ends in `|| true`, so it reports problems without ever
+  # failing the job - on either arch. That predates this change and is left
+  # as-is deliberately: dropping it is a separate call, because nobody has
+  # established that `make -C bpf check` is currently clean, and making it
+  # blocking in the same change that adds a new arch would conflate "arm64
+  # is broken" with "this check was never enforced".
   bpf-lint:
-    name: BPF Lint
+    name: BPF Lint (${{ matrix.arch }})
     needs: check_changes
     if: ${{ needs.check_changes.outputs.bpf-tree == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
