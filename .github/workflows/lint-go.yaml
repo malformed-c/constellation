@@ -57,9 +57,26 @@ jobs:
           skip-cache: true
           args: "--verbose --modules-download-mode=vendor"
 
+  # Unit tests run on BOTH architectures. The images are already built
+  # linux/amd64,linux/arm64 (build-images.yaml), so arm64 binaries ship
+  # whether or not anything exercises them; this is what actually tests
+  # them. Only this job is matrixed: go-mod is vendoring (arch-independent)
+  # and golangci-lint's rules are too - the arm64 typecheck that would
+  # matter is already covered here, because `go test` compiles every
+  # package and its tests for the target arch.
   go-test:
-    name: Unit Tests
-    runs-on: ubuntu-24.04
+    name: Unit Tests (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Don't let one arch failing cancel the other - when they diverge,
+      # seeing BOTH results is the whole point.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
