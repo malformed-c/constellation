@@ -331,12 +331,12 @@ func TestManagedPawnsSelector_DiscoversLabeledNodes(t *testing.T) {
 	nodeTypes.SetName("host-sel-1")
 
 	nodes := []*slim_corev1.Node{
-		slimNode("pawn-a", map[string]string{"periapsis.io/host": "rack-10"}),
-		slimNode("pawn-b", map[string]string{"periapsis.io/host": "rack-10"}),
+		slimNode("pawn-a", map[string]string{"peri.apsis/host": "rack-10"}),
+		slimNode("pawn-b", map[string]string{"peri.apsis/host": "rack-10"}),
 		slimNode("other-host", map[string]string{"unrelated": "label"}),
 	}
 
-	tbl, db, cs := selectorHiveWithTable(t, "periapsis.io/host=rack-10", nodes)
+	tbl, db, cs := selectorHiveWithTable(t, "peri.apsis/host=rack-10", nodes)
 	ctx := t.Context()
 
 	// Create pods on all three nodes.
@@ -405,7 +405,7 @@ func TestManagedPawnsSelector_NoMatchingNodes_FallsBackToLocal(t *testing.T) {
 	nodeTypes.SetName("local-host")
 
 	// No nodes match the selector.
-	tbl, db, cs := selectorHiveWithTable(t, "periapsis.io/host=nonexistent", nil)
+	tbl, db, cs := selectorHiveWithTable(t, "peri.apsis/host=nonexistent", nil)
 	ctx := t.Context()
 
 	_, err := cs.Slim().CoreV1().Pods("default").Create(ctx,
@@ -431,9 +431,9 @@ func TestManagedPawnsSelector_DynamicNodeAdd(t *testing.T) {
 
 	// Start with one node.
 	nodes := []*slim_corev1.Node{
-		slimNode("pawn-x", map[string]string{"periapsis.io/host": "rack-20"}),
+		slimNode("pawn-x", map[string]string{"peri.apsis/host": "rack-20"}),
 	}
-	tbl, db, cs := selectorHiveWithTable(t, "periapsis.io/host=rack-20", nodes)
+	tbl, db, cs := selectorHiveWithTable(t, "peri.apsis/host=rack-20", nodes)
 	ctx := t.Context()
 
 	// Pod on initial node.
@@ -447,7 +447,7 @@ func TestManagedPawnsSelector_DynamicNodeAdd(t *testing.T) {
 
 	// Dynamically add a new node matching the selector.
 	_, err = cs.Slim().CoreV1().Nodes().Create(ctx,
-		slimNode("pawn-y", map[string]string{"periapsis.io/host": "rack-20"}),
+		slimNode("pawn-y", map[string]string{"peri.apsis/host": "rack-20"}),
 		meta_v1.CreateOptions{})
 	require.NoError(t, err)
 
@@ -481,10 +481,10 @@ func TestManagedPawnsSelector_NodeRemoval(t *testing.T) {
 	nodeTypes.SetName("host-rm")
 
 	nodes := []*slim_corev1.Node{
-		slimNode("pawn-1", map[string]string{"periapsis.io/host": "rack-30"}),
-		slimNode("pawn-2", map[string]string{"periapsis.io/host": "rack-30"}),
+		slimNode("pawn-1", map[string]string{"peri.apsis/host": "rack-30"}),
+		slimNode("pawn-2", map[string]string{"peri.apsis/host": "rack-30"}),
 	}
-	tbl, db, cs := selectorHiveWithTable(t, "periapsis.io/host=rack-30", nodes)
+	tbl, db, cs := selectorHiveWithTable(t, "peri.apsis/host=rack-30", nodes)
 	ctx := t.Context()
 
 	// Create pods on both nodes.
@@ -550,14 +550,14 @@ func TestNodeAddedCallback_FiredOnDynamicAdd(t *testing.T) {
 
 	// Start with one node.
 	nodes := []*slim_corev1.Node{
-		slimNode("pawn-init", map[string]string{"periapsis.io/host": "rack-cb"}),
+		slimNode("pawn-init", map[string]string{"peri.apsis/host": "rack-cb"}),
 	}
-	_, _, cs := selectorHiveWithTable(t, "periapsis.io/host=rack-cb", nodes)
+	_, _, cs := selectorHiveWithTable(t, "peri.apsis/host=rack-cb", nodes)
 	ctx := t.Context()
 
 	// Dynamically add a new node.
 	_, err := cs.Slim().CoreV1().Nodes().Create(ctx,
-		slimNode("pawn-late", map[string]string{"periapsis.io/host": "rack-cb"}),
+		slimNode("pawn-late", map[string]string{"peri.apsis/host": "rack-cb"}),
 		meta_v1.CreateOptions{})
 	require.NoError(t, err)
 
@@ -595,13 +595,13 @@ func TestNodeAddedCallback_MultipleCallbacks(t *testing.T) {
 	})
 
 	nodes := []*slim_corev1.Node{
-		slimNode("pawn-a", map[string]string{"periapsis.io/host": "rack-mcb"}),
+		slimNode("pawn-a", map[string]string{"peri.apsis/host": "rack-mcb"}),
 	}
-	_, _, cs := selectorHiveWithTable(t, "periapsis.io/host=rack-mcb", nodes)
+	_, _, cs := selectorHiveWithTable(t, "peri.apsis/host=rack-mcb", nodes)
 	ctx := t.Context()
 
 	_, err := cs.Slim().CoreV1().Nodes().Create(ctx,
-		slimNode("pawn-b", map[string]string{"periapsis.io/host": "rack-mcb"}),
+		slimNode("pawn-b", map[string]string{"peri.apsis/host": "rack-mcb"}),
 		meta_v1.CreateOptions{})
 	require.NoError(t, err)
 
