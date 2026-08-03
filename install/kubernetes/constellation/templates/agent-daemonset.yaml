@@ -39,11 +39,39 @@ spec:
             - sh
             - -c
             - |
+              set -eu
+              # Persist for subsequent boots.
               printf '%s\n' \
                 'net.ipv4.conf.default.rp_filter = 0' \
+                'net.ipv4.conf.all.rp_filter = 0' \
                 'net.ipv4.conf.*.rp_filter = 0' \
                 > /host-etc/sysctl.d/99-constellation-rp-filter.conf
-              sysctl --system >/dev/null 2>&1 || true
+              # Apply NOW, explicitly. Do NOT use `sysctl --system`: it reads
+              # THIS CONTAINER's /etc and /usr/lib/sysctl.d, not the host's -
+              # the host's /etc is mounted at /host-etc, so the file written
+              # above is not even on the path it would read. Meanwhile the
+              # agent image ships /usr/lib/sysctl.d/55-network-security.conf
+              # with rp_filter=2, and this pod is hostNetwork + privileged, so
+              # `sysctl --system` applied the *container's* hardening defaults
+              # to the *host* - setting rp_filter to 2, the exact opposite of
+              # this container's purpose.
+              sysctl -w net.ipv4.conf.default.rp_filter=0
+              sysctl -w net.ipv4.conf.all.rp_filter=0
+              # A veth keeps the value it was born with, and cilium only writes
+              # rp_filter=0 on devices it CREATES. So any lxc* device that
+              # already existed when this agent started - e.g. pods adopted
+              # across a cold boot - keeps the old default of 2 and silently
+              # drops all pod egress in the kernel's reverse-path check: after
+              # the veth tap, before conntrack, with no cilium drop event. Sweep
+              # them, otherwise the fix only covers pods created from now on and
+              # the existing cohort stays dead until something recreates it.
+              for f in /proc/sys/net/ipv4/conf/lxc*/rp_filter; do
+                [ -e "$f" ] || continue
+                if [ "$(cat "$f")" != 0 ]; then
+                  echo 0 > "$f"
+                  echo "reset rp_filter=0 on ${f}"
+                fi
+              done
           securityContext:
             privileged: true
           volumeMounts:
