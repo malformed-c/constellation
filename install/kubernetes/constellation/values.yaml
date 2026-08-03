@@ -37,9 +37,9 @@ k8sAPIServerURLs: []
 # datapath doesn't run there today, so there's nothing "primary" enough to
 # override this with.
 nodeSelector:
-  periapsis.io/primary: "true"
+  peri.apsis/primary: "true"
   kubernetes.io/arch: amd64
-managedPawnsSelector: periapsis.io/host
+managedPawnsSelector: peri.apsis/host
 
 # Optional cilium cluster identity (clustermesh). 0 / "" = unset.
 clusterName: ""

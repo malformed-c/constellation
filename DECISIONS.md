@@ -42,7 +42,7 @@ Run one constellation-agent per pawn, with all singleton resources namespaced un
 
 #### Option B: `--managed-node-selector` (one agent per host) ← **implemented**
 
-Run one constellation-agent per physical host. The agent discovers managed nodes dynamically via a label selector (`--managed-node-selector=periapsis.io/host`) and creates per-node pod reflectors.
+Run one constellation-agent per physical host. The agent discovers managed nodes dynamically via a label selector (`--managed-node-selector=peri.apsis/host`) and creates per-node pod reflectors.
 
 **Changes (Phase 1 — static list, now superseded):**
 - `daemon/k8s/pods.go` — replace single `spec.nodeName=X` field selector with multiple watches (one per managed node name), merged into the same `LocalPod` statedb table
@@ -50,7 +50,7 @@ Run one constellation-agent per physical host. The agent discovers managed nodes
 - `pkg/node/types/nodename.go` — expose `GetManagedNames() []string` alongside `GetName()`
 
 **Changes (Phase 2 — label-based discovery, current):**
-- `pkg/option/config.go` — `ManagedNodeSelector` field with bare-key auto-expansion (`periapsis.io/host` → `periapsis.io/host=<hostname>`)
+- `pkg/option/config.go` — `ManagedNodeSelector` field with bare-key auto-expansion (`peri.apsis/host` → `peri.apsis/host=<hostname>`)
 - `daemon/k8s/nodes.go` — `discoverManagedNodes` (synchronous List at startup) + `startNodeWatcher` (background Watch for dynamic add/remove)
 - `daemon/k8s/pods.go` — `NewPodTableAndReflector` integrates node discovery and watcher
 - `daemon/cmd/daemon_main.go` — `--managed-node-selector` flag (replaces `--managed-nodes`)
@@ -95,6 +95,6 @@ Pawns are named `<hostname>-0`, `<hostname>-1`, etc. The agent watches a prefix 
 
 ### Decision
 
-**Option B** is implemented with label-based discovery (`--managed-node-selector`). One agent per host is architecturally simpler, has lower resource overhead, and the agent dynamically discovers nodes via `periapsis.io/host` labels. With an empty selector, the agent behaves identically to stock Cilium (single local node).
+**Option B** is implemented with label-based discovery (`--managed-node-selector`). One agent per host is architecturally simpler, has lower resource overhead, and the agent dynamically discovers nodes via `peri.apsis/host` labels. With an empty selector, the agent behaves identically to stock Cilium (single local node).
 
 Option A code (`--instance-id`) is preserved in the repository and can be reinstated if strong pawn isolation (separate BPF maps, independent failure domains) becomes a requirement. Option C is available as a fallback if multi-watch proves unreliable at scale.

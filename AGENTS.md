@@ -56,7 +56,7 @@ Heals a confirmed production failure mode: an endpoint lost across an agent rest
 
 ## Key flag: --managed-pawns-selector
 
-Pass a bare label key (e.g. `periapsis.io/host`) — it auto-expands to `periapsis.io/host=<os.Hostname()>`. The agent then:
+Pass a bare label key (e.g. `peri.apsis/host`) — it auto-expands to `peri.apsis/host=<os.Hostname()>`. The agent then:
 
 1. **Startup**: Lists nodes matching the selector, calls `SetManagedNames`, creates per-node pod reflectors
 2. **Runtime**: Watches for node add/remove, dynamically registers new reflectors
@@ -81,7 +81,7 @@ The allocator is initialized with the primary node's CIDR plus CIDRs fetched fro
 ## Key deployment flags
 
 ```
---managed-pawns-selector=periapsis.io/host
+--managed-pawns-selector=peri.apsis/host
 --routing-mode=tunnel
 --kube-proxy-replacement=true
 --ipam=cluster-pool

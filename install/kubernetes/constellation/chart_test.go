@@ -256,3 +256,37 @@ func TestAgentDaemonSet_ArchNodeSelector(t *testing.T) {
 
 	require.Nil(t, spec["affinity"], "node exclusion must be via nodeSelector, not a nodeAffinity NotIn list")
 }
+
+// TestAgentDaemonSet_LabelDomain pins the peri.apsis label domain that the
+// chart depends on, for both keys and for two different reasons:
+//
+//   - nodeSelector peri.apsis/primary decides where the agent DaemonSet is
+//     SCHEDULED. If this key stops matching what perigeos writes, the
+//     DaemonSet schedules on zero nodes and every agent is evicted.
+//   - managedPawnsSelector peri.apsis/host decides which pawn nodes each
+//     agent MANAGES. If this stops matching, the agent silently falls back
+//     to managing only its own node (pkg/k8s/tables/nodewatcher.go) and
+//     IPAM drops to host-scope (pkg/ipam/ipam.go) - while the agent stays
+//     Running and reports healthy. That failure does not announce itself,
+//     which is exactly why it is worth a test.
+//
+// Renamed from periapsis.io/* on 2026-08-02 in lockstep with periapsis.
+// Kubernetes label selectors have no OR across keys, so these must match
+// the labels on the nodes exactly - there is no partial-credit state.
+func TestAgentDaemonSet_LabelDomain(t *testing.T) {
+	spec := renderAgentDaemonSet(t)
+
+	nodeSelector, _ := spec["nodeSelector"].(map[string]any)
+	require.Equal(t, "true", nodeSelector["peri.apsis/primary"],
+		"DaemonSet scheduling selector must use the peri.apsis domain")
+	require.NotContains(t, nodeSelector, "periapsis.io/primary",
+		"the old periapsis.io domain must not linger alongside the new one")
+
+	agent := findByName(t, spec["containers"].([]any), "agent")
+	args := toStringSlice(agent["args"])
+	require.Contains(t, args, "--managed-pawns-selector=peri.apsis/host")
+	for _, a := range args {
+		require.NotContains(t, a, "periapsis.io/",
+			"no argument may still reference the old label domain")
+	}
+}

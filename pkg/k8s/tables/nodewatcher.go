@@ -6,7 +6,7 @@ package tables
 // Node watcher for --managed-pawns-selector.
 //
 // When the agent is configured with a label selector (e.g.
-// periapsis.io/host=engix99), this module discovers the k8s Node objects
+// peri.apsis/host=engix99), this module discovers the k8s Node objects
 // that match and wires them into the managed-names set used by the pod
 // reflectors and endpoint restore logic.
 //

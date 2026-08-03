@@ -12,7 +12,7 @@ Constellation adds `--managed-pawns-selector`, a label selector that lets one ag
 
 | Feature | Description |
 |---|---|
-| `--managed-pawns-selector` | Label selector for discovering pawn nodes. Pass a bare label key (e.g. `periapsis.io/host`) to auto-append `=<hostname>`. |
+| `--managed-pawns-selector` | Label selector for discovering pawn nodes. Pass a bare label key (e.g. `peri.apsis/host`) to auto-append `=<hostname>`. |
 | `managedScopeAllocator` | IPAM allocator that merges per-pawn CIDRs into a single round-robin pool. Each pawn gets its own `/20` (or configured size) from its CiliumNode. |
 | Pod reflector | Watches pods across all managed node names, not just the local node. |
 | Endpoint restore | Restores endpoints for pods on any managed node after agent restart. |
@@ -27,14 +27,14 @@ Constellation runs as a DaemonSet (or perigeos-managed pod) on the physical host
 
 ```yaml
 args:
-  - --managed-pawns-selector=periapsis.io/host
+  - --managed-pawns-selector=peri.apsis/host
   - --routing-mode=tunnel
   - --kube-proxy-replacement=true
   - --ipam=cluster-pool
   - --bpf-lb-sock-hostns-only=true
 ```
 
-The `--managed-pawns-selector=periapsis.io/host` flag auto-appends `=<hostname>`, so the agent discovers all nodes labeled `periapsis.io/host=<this-host>`.
+The `--managed-pawns-selector=peri.apsis/host` flag auto-appends `=<hostname>`, so the agent discovers all nodes labeled `peri.apsis/host=<this-host>`.
 
 See `deploy/constellation/` in the perigeos repo for full manifests.
 
@@ -54,7 +54,7 @@ The constellation-operator (part of perigeos) creates and manages the CiliumNode
 | `constellation_stz_flows` | pod IPv4 | last-seen timestamp | Every managed pod IP, updated on each ingress packet — periapsis uses this to decide when a pod has gone idle. |
 | `constellation_stz_events` | — | ringbuf | Wake events (dest pod IP) consumed by periapsis to un-idle the pod. |
 
-Arming/disarming and the idle-detection policy live entirely in periapsis (`internal/activator/`), not in this repo — Constellation only owns the datapath maps and the drop/wake hook. Only pods opted in via the `periapsis.io/scale-to-zero` annotation are ever armed.
+Arming/disarming and the idle-detection policy live entirely in periapsis (`internal/activator/`), not in this repo — Constellation only owns the datapath maps and the drop/wake hook. Only pods opted in via the `peri.apsis/scale-to-zero` annotation are ever armed.
 
 **IPAM cleanup:** the maps are keyed by bare IP with no pod UID/generation binding, so a trigger left behind by a periapsis crash/restart (before it could disarm a deleted pod) would otherwise survive independently of any pod — and silently black-hole every future SYN to that IP if Kubernetes later reassigns it to an unrelated pod. `pkg/maps/constellationstz` + hooks in `pkg/ipam/allocator.go` (`clearScaleToZeroState`, called on both allocate and release) purge any stale trigger/flow entry for an IP the moment IPAM hands it out or frees it, so a leaked entry can never outlive the IP it was armed for.
 
