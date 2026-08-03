@@ -11,8 +11,14 @@ package tables
 // reflectors and endpoint restore logic.
 //
 // At startup, discoverManagedNodes performs a synchronous List to seed the
-// initial set. A background watch (watchManagedNodes) then handles dynamic
-// node addition/removal — e.g. when perigeos registers a new pawn.
+// initial set — synchronous because IPAM reads the managed-name set from its
+// own start hook and silently picks a host-scope allocator if it is not yet
+// populated. Because that List runs before the k8s client cell has had a
+// chance to wait for a connection, it is wrapped in
+// discoverManagedNodesWithRetry; see the comment there.
+//
+// A background watch (watchManagedNodes) then handles dynamic node
+// addition/removal — e.g. when perigeos registers a new pawn.
 
 import (
 	"context"
@@ -74,7 +80,7 @@ func NewPodTableAndReflector(jg job.Group, db *statedb.DB, cs client.Clientset) 
 		// create a pod reflector per node, and start a background
 		// watcher for dynamic node addition/removal.
 		ctx := context.TODO()
-		names, err := discoverManagedNodes(ctx, cs, selector)
+		names, err := discoverManagedNodesWithRetry(ctx, cs, selector)
 		if err != nil {
 			return nil, err
 		}
@@ -192,6 +198,63 @@ func fireNodeAdded(name string) {
 
 	for _, cb := range cbs {
 		cb(name)
+	}
+}
+
+var (
+	// How long initial managed-node discovery keeps retrying an unreachable
+	// API server before giving up, and how long it waits between attempts.
+	//
+	// Discovery runs during hive object-graph population, i.e. BEFORE the
+	// client cell's start hook has run upstream's own connection wait and
+	// failover loop (waitForConn in pkg/k8s/client/cell.go). Constructors go
+	// first, so on a cold boot where the API server comes up after the agent
+	// this is the first code to touch it, and a bare error here surfaces as
+	// "failed to populate object graph" — a hard fatal, on every cold boot.
+	//
+	// Retrying in-process is strictly better than crashing: we succeed the
+	// moment the API server answers, whereas CrashLoopBackOff would add up to
+	// five minutes of backoff before the agent even tried again. The budget
+	// is bounded rather than infinite so a genuinely unreachable endpoint
+	// still fails loudly instead of hanging startup forever.
+	//
+	// Variables rather than constants so tests can shrink them.
+	managedNodeDiscoveryTimeout  = 5 * time.Minute
+	managedNodeDiscoveryInterval = 5 * time.Second
+)
+
+// discoverManagedNodesWithRetry calls discoverManagedNodes, retrying while the
+// API server is unreachable. Errors caused by the request itself rather than by
+// the connection (a malformed selector, or missing RBAC) are returned
+// immediately — they will not fix themselves, and stalling on them for minutes
+// would hide the real cause.
+//
+// Note that a selector matching no nodes is not an error; see
+// discoverManagedNodes.
+func discoverManagedNodesWithRetry(ctx context.Context, cs client.Clientset, selector string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, managedNodeDiscoveryTimeout)
+	defer cancel()
+
+	for attempt := 1; ; attempt++ {
+		names, err := discoverManagedNodes(ctx, cs, selector)
+		if err == nil {
+			return names, nil
+		}
+		if k8serrors.IsBadRequest(err) || k8serrors.IsInvalid(err) || k8serrors.IsForbidden(err) {
+			return nil, err
+		}
+
+		nodeWatcherLog.Warn("Managed node discovery failed, retrying",
+			logfields.Selector, selector,
+			logfields.Attempt, attempt,
+			logfields.Error, err)
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("managed node discovery gave up after %s: %w",
+				managedNodeDiscoveryTimeout, err)
+		case <-time.After(managedNodeDiscoveryInterval):
+		}
 	}
 }
 
