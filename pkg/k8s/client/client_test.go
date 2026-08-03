@@ -1144,3 +1144,51 @@ func Test_clientAPIServerURLTiers(t *testing.T) {
 	}
 	require.Len(t, seen, 2, "tier members must be shuffled per-process, not fixed")
 }
+
+// The exported rotation hook is what lets work that runs during hive
+// object-graph population (managed-node discovery) fall through the tier list
+// before upstream's own connection loop has had a chance to run.
+func Test_clientRotateAPIServerURLHook(t *testing.T) {
+	newClient := func(urls ...string) *compositeClientset {
+		m := &restConfigManager{
+			log:        hivetest.Logger(t),
+			rt:         &rotatingHttpRoundTripper{log: hivetest.Logger(t)},
+			restConfig: &rest.Config{},
+		}
+		m.parseConfig(Config{SharedConfig: SharedConfig{K8sAPIServerURLs: urls}})
+		m.selectPreferredAPIServerURL()
+		return &compositeClientset{restConfigManager: m}
+	}
+
+	// Walks the tiers in preference order and wraps around.
+	c := newClient("https://127.0.0.1:6443", "https://192.168.50.1:6443")
+	require.Equal(t, "https://127.0.0.1:6443", c.restConfigManager.getConfig().Host)
+	require.True(t, c.RotateAPIServerURL())
+	require.Equal(t, "https://192.168.50.1:6443", c.restConfigManager.getConfig().Host)
+	require.True(t, c.RotateAPIServerURL())
+	require.Equal(t, "https://127.0.0.1:6443", c.restConfigManager.getConfig().Host)
+
+	// Nothing to fall through to.
+	single := newClient("https://127.0.0.1:6443")
+	require.False(t, single.RotateAPIServerURL())
+	require.Equal(t, "https://127.0.0.1:6443", single.restConfigManager.getConfig().Host)
+
+	// Once graduated onto the service address the datapath load balances
+	// across live backends; manual rotation would fight it.
+	c.restConfigManager.isConnectedToService = true
+	host := c.restConfigManager.getConfig().Host
+	require.False(t, c.RotateAPIServerURL())
+	require.Equal(t, host, c.restConfigManager.getConfig().Host)
+
+	// A disabled clientset has no manager at all.
+	require.False(t, (&compositeClientset{}).RotateAPIServerURL())
+}
+
+// The hook is reached through an optional interface, so it is only wired up if
+// what the hive provides really is the type carrying the method. A wrapper
+// introduced later would silently turn fall-through back into a plain retry.
+func Test_clientProvidedClientsetSupportsRotation(t *testing.T) {
+	var cs Clientset = &compositeClientset{}
+	_, ok := cs.(interface{ RotateAPIServerURL() bool })
+	require.True(t, ok, "the concrete type provided as Clientset must carry the rotation hook")
+}
