@@ -272,7 +272,7 @@ func (r *restConfigManager) parseConfig(cfg Config) {
 	for _, tierSpec := range cfg.K8sAPIServerURLs {
 		var tier []*url.URL
 
-		for _, apiServerURL := range strings.Fields(tierSpec) {
+		for apiServerURL := range strings.FieldsSeq(tierSpec) {
 			if !strings.HasPrefix(apiServerURL, "http") && !strings.HasPrefix(apiServerURL, "https") {
 				apiServerURL = fmt.Sprintf("https://%s", apiServerURL)
 			}
