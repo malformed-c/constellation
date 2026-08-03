@@ -321,3 +321,62 @@ func TestAgentDaemonSet_K8sAPIServerURLTiers(t *testing.T) {
 	require.NotContains(t, args, "--k8s-api-server-urls=https://10.0.0.1:6443",
 		"tier members must not be split into one flag each - that loses the tier")
 }
+
+// TestAgentDaemonSet_RpFilterFixDoesNotApplyContainerSysctls guards the
+// inversion that caused the 2026-08-03 silent pod-egress outage.
+//
+// The fix-sysctls init container exists to turn reverse-path filtering OFF on
+// the host. It used to write the correct file to /host-etc/sysctl.d and then
+// run `sysctl --system` — but the host's /etc is mounted at /host-etc, so that
+// command reads THIS CONTAINER's sysctl.d, not the host's. The agent image
+// ships /usr/lib/sysctl.d/55-network-security.conf with rp_filter=2, and the
+// pod is hostNetwork + privileged, so it applied the container's hardening
+// defaults to the host and set rp_filter=2 — the opposite of its purpose.
+//
+// The result was invisible: pods whose veth kept rp_filter=2 had every egress
+// packet discarded by the kernel after the veth tap and before conntrack, so
+// there was no cilium drop event and no unhealthy pod. Three workloads ran
+// dead for five hours reporting Ready the whole time.
+func TestAgentDaemonSet_RpFilterFixDoesNotApplyContainerSysctls(t *testing.T) {
+	spec := renderAgentDaemonSet(t)
+
+	init := findByName(t, spec["initContainers"].([]any), "fix-sysctls")
+
+	// Assert on the EXECUTED lines only. The script comments necessarily
+	// discuss `sysctl --system` in order to explain why it must not be used,
+	// and a naive substring check matches that prose and fails on a correct
+	// script — the same "grep matched the text about the thing, not the
+	// thing" trap this file's other tests exist to avoid.
+	var executed []string
+	for line := range strings.SplitSeq(strings.Join(toStringSlice(init["command"]), "\n"), "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			executed = append(executed, line)
+		}
+	}
+	script := strings.Join(executed, "\n")
+	require.Contains(t, script, "rp_filter",
+		"sanity: the stripped script must still contain the sysctl work, "+
+			"otherwise these NotContains assertions would pass vacuously")
+
+	require.NotContains(t, script, "sysctl --system",
+		"must not run `sysctl --system`: it reads the CONTAINER's sysctl.d "+
+			"(host /etc is at /host-etc) and would apply the image's "+
+			"rp_filter=2 to the host via hostNetwork")
+
+	// Setting the live values is what actually takes effect; writing the file
+	// alone only helps at the next boot.
+	require.Contains(t, script, "sysctl -w net.ipv4.conf.default.rp_filter=0")
+	require.Contains(t, script, "sysctl -w net.ipv4.conf.all.rp_filter=0")
+
+	// Existing veths keep the value they were born with and cilium only writes
+	// rp_filter on devices it creates, so without this sweep every pod adopted
+	// across a cold boot stays silently dead until something recreates it.
+	require.Contains(t, script, "/proc/sys/net/ipv4/conf/lxc*/rp_filter",
+		"must sweep pre-existing lxc devices, not just fix future ones")
+
+	// The inversion survived because the container's failure was silenced.
+	require.NotContains(t, script, "|| true",
+		"must not swallow errors: that is why the inverted sysctl went unnoticed")
+	require.NotContains(t, script, ">/dev/null 2>&1",
+		"must not discard output: this container's failure needs to be visible")
+}
