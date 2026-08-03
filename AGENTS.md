@@ -70,6 +70,26 @@ Tests in `pkg/k8s/tables/managed_nodes_test.go` cover both paths.
 
 The real fix is that a Kubernetes control plane can legitimately bind several interfaces at once (e.g. loopback on the colocated node, plus one or more shared LAN addresses reachable from every node) — so the correct model isn't "detect which one address this node can reach," it's "give the agent every valid candidate and let it pick." Cilium's `pkg/k8s/client` already has exactly this built in: `--k8s-api-server-urls` (`k8sAPIServerURLs` in `values.yaml`, a list) feeds `restConfigManager`, which picks a candidate at random, retries the others in a tight loop on connection failure (no shell-script sleep/poll needed), and keeps re-verifying `/readyz` at runtime via a heartbeat controller — see `pkg/k8s/client/rest_config_provider.go` and `cell.go`'s `waitForConn`/`startHeartbeat`. Set `k8sAPIServerURLs` to every address the control plane binds; leave it empty (default) for a single-address deployment, which falls straight through to the plain env vars unchanged.
 
+### The ClusterIP deadlock, and why this fork patches `restConfigManager` twice
+
+Upstream's failover has a trap that has wedged this cluster twice, so read this before touching `pkg/k8s/client/rest_config_provider.go`.
+
+Once the agent is connected, `updateMappings()` **graduates** the client from the configured `--k8s-api-server-urls` to the in-cluster `kubernetes` Service ClusterIP, on the reasoning that kube-proxy-replacement will load-balance across live API servers from then on. Graduation does two things, and both are load-bearing:
+
+1. it sets `isConnectedToService`, which gates `canRotateAPIServerURL()` off, and
+2. it **replaces** `apiServerURLs` with the Service's *endpoints*, discarding the configured list.
+
+That assumption breaks when the Service has no working backend: there is nothing to load-balance to, and the agent needs the API server to learn the EndpointSlice that would give the ClusterIP a backend. It sits there re-dialling an address it cannot route through — while reporting healthy, because nothing in-tree detects unreachability.
+
+Two fork commits fix it, and you need **both**:
+
+- **un-latch** — `disconnectFromService()` clears `isConnectedToService` from the heartbeat's `onFailure` path (`cell.go`'s `rotateAPIServer`), so rotation is possible again.
+- **restore the list** — the same function puts `configuredAPIServerURLs` back. Clearing the latch alone is *not enough*: after graduation on a **single-API-server cluster** the endpoint list has exactly one entry, so `canRotateAPIServerURL()`'s `len(apiServerURLs) > 1` stays false forever and no rotation can occur. Observed live: the un-latch fired once and the agent then dialled a dead ClusterIP 158,595 times. With one configured URL `rotateAPIServerURL()` also no-ops, so `disconnectFromService()` resets the host explicitly.
+
+Severity is conditional on control-plane topology — with several API servers the endpoint list keeps >1 entry and the first fix alone would have sufficed. A restart always clears it regardless, because `parseConfig` re-reads the configured URLs and bootstrap dials one directly, never the ClusterIP.
+
+When testing this path, note that `updateMappings()` only replaces the URL list **when the mapping actually carries endpoints**. A test built with `K8sServiceEndpointMapping{Service: ...}` and no `Endpoints` skips the replacement entirely and will pass against the broken code — that exact mistake is why the first fix shipped incomplete.
+
 ## IPAM: managedScopeAllocator
 
 Each pawn CiliumNode has its own pod CIDR (e.g. `/20`). `managedScopeAllocator` merges all pawn CIDRs into one pool and allocates round-robin. This allows one agent to manage 30+ pawns × 4094 IPs each.

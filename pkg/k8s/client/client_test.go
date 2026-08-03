@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 
 	"github.com/cilium/cilium/pkg/hive"
 	k8smetrics "github.com/cilium/cilium/pkg/k8s/metrics"
@@ -922,4 +924,85 @@ func BenchmarkIsConnReadyMultipleAPIServers(b *testing.B) {
 	}
 
 	require.NoError(b, h.Stop(tlog, ctx))
+}
+
+// Test_clientAPIServerURLsRestoredOnDisconnect is a regression test for the
+// SECOND half of the engifire ClusterIP deadlock (2026-08-02). The first fix
+// cleared the isConnectedToService latch on heartbeat failure, but that alone
+// was not enough and the agent stayed wedged in production:
+//
+//	"Lost connectivity to kubeapi service address"  x1       <- un-latch fired
+//	"Rotated api server"                            x0       <- rotation did not
+//	"no route to host"                              158595   <- dead ClusterIP
+//
+// Cause: updateMappings() REPLACES apiServerURLs with the service's endpoints
+// on switchover, discarding the configured list. A single-apiserver cluster
+// leaves one entry, so canRotateAPIServerURL()'s `len(...) > 1` is false
+// forever and no rotation can occur regardless of the latch.
+//
+// This asserts the configured list is restored, so rotation is possible again.
+func Test_clientAPIServerURLsRestoredOnDisconnect(t *testing.T) {
+	mgr := &restConfigManager{
+		log:        hivetest.Logger(t),
+		rt:         &rotatingHttpRoundTripper{log: hivetest.Logger(t)},
+		restConfig: &rest.Config{},
+	}
+	mgr.parseConfig(Config{SharedConfig: SharedConfig{K8sAPIServerURLs: []string{
+		"https://10.0.0.1:6443",
+		"https://10.0.0.2:6443",
+		"https://10.0.0.3:6443",
+	}}})
+	require.Len(t, mgr.apiServerURLs, 3)
+	require.Len(t, mgr.configuredAPIServerURLs, 3, "configured list must be captured at parse time")
+	require.True(t, mgr.canRotateAPIServerURL())
+
+	// Simulate switchover: the service had a SINGLE endpoint, which is what
+	// collapses the list on a one-apiserver cluster.
+	mgr.Lock()
+	mgr.isConnectedToService = true
+	mgr.apiServerURLs = []*url.URL{{Scheme: "https", Host: "10.96.0.1:443"}}
+	mgr.restConfig.Host = "https://10.96.0.1:443"
+	mgr.Unlock()
+	require.False(t, mgr.canRotateAPIServerURL(),
+		"precondition: after switchover with one endpoint, rotation is gated off")
+
+	// The heartbeat failure path.
+	mgr.disconnectFromService()
+
+	require.False(t, mgr.isConnectedToService, "latch must clear")
+	require.Len(t, mgr.apiServerURLs, 3,
+		"the CONFIGURED urls must be restored - clearing the latch alone leaves a "+
+			"single-entry list and rotation stays impossible, which is the live bug")
+	require.True(t, mgr.canRotateAPIServerURL(),
+		"rotation must be possible again after disconnect")
+
+	// And it must actually be able to move off the dead service address.
+	mgr.rotateAPIServerURL()
+	require.NotEqual(t, "https://10.96.0.1:443", mgr.getConfig().Host,
+		"must rotate away from the unreachable service address")
+}
+
+// Test_clientSingleConfiguredURLRestoredOnDisconnect covers the case
+// rotateAPIServerURL() cannot handle: with exactly one configured apiserver it
+// returns early, so nothing would move the host off the dead service address
+// unless disconnectFromService() points it back explicitly.
+func Test_clientSingleConfiguredURLRestoredOnDisconnect(t *testing.T) {
+	mgr := &restConfigManager{
+		log:        hivetest.Logger(t),
+		rt:         &rotatingHttpRoundTripper{log: hivetest.Logger(t)},
+		restConfig: &rest.Config{},
+	}
+	mgr.parseConfig(Config{SharedConfig: SharedConfig{K8sAPIServerURLs: []string{"https://10.0.0.1:6443"}}})
+
+	mgr.Lock()
+	mgr.isConnectedToService = true
+	mgr.apiServerURLs = []*url.URL{{Scheme: "https", Host: "10.96.0.1:443"}}
+	mgr.restConfig.Host = "https://10.96.0.1:443"
+	mgr.Unlock()
+
+	mgr.disconnectFromService()
+
+	require.Equal(t, "https://10.0.0.1:6443", mgr.getConfig().Host,
+		"with a single configured apiserver, rotateAPIServerURL() no-ops, so disconnect "+
+			"must restore the host itself or the agent keeps dialling the dead ClusterIP")
 }
