@@ -1006,3 +1006,141 @@ func Test_clientSingleConfiguredURLRestoredOnDisconnect(t *testing.T) {
 		"with a single configured apiserver, rotateAPIServerURL() no-ops, so disconnect "+
 			"must restore the host itself or the agent keeps dialling the dead ClusterIP")
 }
+
+// Test_clientAPIServerURLOrderIsPreference verifies --k8s-api-server-urls is an
+// ORDERED PREFERENCE list: the first entry is used at startup and failures walk
+// the rest in configured order. Upstream picked at random, so list order was
+// meaningless and an operator could not express "prefer the wired path over the
+// wireless one" - which is what motivated the change.
+func Test_clientAPIServerURLOrderIsPreference(t *testing.T) {
+	mgr := &restConfigManager{
+		log:        hivetest.Logger(t),
+		rt:         &rotatingHttpRoundTripper{log: hivetest.Logger(t)},
+		restConfig: &rest.Config{},
+	}
+	mgr.parseConfig(Config{SharedConfig: SharedConfig{K8sAPIServerURLs: []string{
+		"https://127.0.0.1:6443",       // preferred
+		"https://192.168.50.1:6443",    // wired fallback
+		"https://192.168.100.200:6443", // wireless, last resort
+	}}})
+
+	// Startup must land on the FIRST entry, deterministically. Under the old
+	// random pick this was the preferred entry only ~1/3 of the time.
+	mgr.selectPreferredAPIServerURL()
+	require.Equal(t, "https://127.0.0.1:6443", mgr.getConfig().Host,
+		"startup must use the operator's first choice")
+
+	// Failures walk the list in order, then wrap.
+	want := []string{
+		"https://192.168.50.1:6443",
+		"https://192.168.100.200:6443",
+		"https://127.0.0.1:6443",
+		"https://192.168.50.1:6443",
+	}
+	for i, w := range want {
+		mgr.rotateAPIServerURL()
+		require.Equal(t, w, mgr.getConfig().Host, "rotation %d must follow configured order", i+1)
+	}
+}
+
+// Test_clientRotateResumesAtPreferredWhenCurrentUnknown covers the state after
+// disconnectFromService: the host is the service address, which is not in the
+// restored configured list. Rotation must resume at the most-preferred entry
+// rather than getting stuck or picking arbitrarily.
+func Test_clientRotateResumesAtPreferredWhenCurrentUnknown(t *testing.T) {
+	mgr := &restConfigManager{
+		log:        hivetest.Logger(t),
+		rt:         &rotatingHttpRoundTripper{log: hivetest.Logger(t)},
+		restConfig: &rest.Config{},
+	}
+	mgr.parseConfig(Config{SharedConfig: SharedConfig{K8sAPIServerURLs: []string{
+		"https://127.0.0.1:6443",
+		"https://192.168.50.1:6443",
+	}}})
+
+	// Current URL is the service address - not a member of the configured list.
+	mgr.rt.apiServerURL = &url.URL{Scheme: "https", Host: "10.96.0.1:443"}
+
+	mgr.rotateAPIServerURL()
+	require.Equal(t, "https://127.0.0.1:6443", mgr.getConfig().Host,
+		"an unknown current URL must resume at the preferred entry, not stall")
+}
+
+// Test_clientConfiguredURLsAreDeepCopied is a regression test for an aliasing
+// bug: rotateAPIServerURL puts a *url.URL from apiServerURLs into
+// rt.apiServerURL, and updateMappings then mutates that object IN PLACE
+// (rt.apiServerURL.Host = mapping.Service). With a shallow copy the "configured"
+// entry is rewritten to the service address, so restoring it on disconnect hands
+// back the very address the fallback exists to escape.
+func Test_clientConfiguredURLsAreDeepCopied(t *testing.T) {
+	mgr := &restConfigManager{
+		log:        hivetest.Logger(t),
+		rt:         &rotatingHttpRoundTripper{log: hivetest.Logger(t)},
+		restConfig: &rest.Config{},
+	}
+	mgr.parseConfig(Config{SharedConfig: SharedConfig{K8sAPIServerURLs: []string{
+		"https://127.0.0.1:6443",
+		"https://192.168.50.1:6443",
+	}}})
+	mgr.selectPreferredAPIServerURL()
+
+	// Exactly what updateMappings does on service switchover.
+	mgr.rt.apiServerURL.Host = "10.96.0.1:443"
+
+	for i, u := range mgr.configuredAPIServerURLs {
+		require.NotEqual(t, "10.96.0.1:443", u.Host,
+			"configured entry %d was mutated through a shared pointer - restoring it "+
+				"would hand back the dead service address", i)
+	}
+	require.Equal(t, "127.0.0.1:6443", mgr.configuredAPIServerURLs[0].Host)
+}
+
+// Test_clientAPIServerURLTiers verifies the TIERED form: each --k8s-api-server-urls
+// value is one tier tried in order, and a value holding several whitespace-separated
+// URLs is a tier whose members are equally preferred (shuffled per-process, so
+// agents starting together spread across them rather than all picking the same one).
+func Test_clientAPIServerURLTiers(t *testing.T) {
+	newMgr := func() *restConfigManager {
+		m := &restConfigManager{
+			log:        hivetest.Logger(t),
+			rt:         &rotatingHttpRoundTripper{log: hivetest.Logger(t)},
+			restConfig: &rest.Config{},
+		}
+		m.parseConfig(Config{SharedConfig: SharedConfig{K8sAPIServerURLs: []string{
+			"https://127.0.0.1:6443",                      // tier 1
+			"https://10.0.0.1:6443 https://10.0.0.2:6443", // tier 2, equal preference
+			"https://192.168.100.200:6443",                // tier 3
+		}}})
+		return m
+	}
+
+	m := newMgr()
+	require.Len(t, m.apiServerURLs, 4, "all tier members must be flattened into the candidate list")
+
+	// Tier boundaries must be respected regardless of intra-tier shuffling.
+	require.Equal(t, "127.0.0.1:6443", m.apiServerURLs[0].Host, "tier 1 comes first")
+	mid := []string{m.apiServerURLs[1].Host, m.apiServerURLs[2].Host}
+	require.ElementsMatch(t, []string{"10.0.0.1:6443", "10.0.0.2:6443"}, mid,
+		"tier 2's members occupy positions 1-2 in some order")
+	require.Equal(t, "192.168.100.200:6443", m.apiServerURLs[3].Host, "tier 3 comes last")
+
+	// Startup uses the most-preferred tier, and rotation walks tier 2 before tier 3.
+	m.selectPreferredAPIServerURL()
+	require.Equal(t, "https://127.0.0.1:6443", m.getConfig().Host)
+	m.rotateAPIServerURL()
+	require.Contains(t, []string{"https://10.0.0.1:6443", "https://10.0.0.2:6443"}, m.getConfig().Host)
+	m.rotateAPIServerURL()
+	require.Contains(t, []string{"https://10.0.0.1:6443", "https://10.0.0.2:6443"}, m.getConfig().Host)
+	m.rotateAPIServerURL()
+	require.Equal(t, "https://192.168.100.200:6443", m.getConfig().Host,
+		"tier 3 is only reached after both tier-2 members")
+
+	// Intra-tier order must actually vary across processes, otherwise the
+	// "spread the load" half of the design does nothing. Two orders over many
+	// constructions is enough; this is a shuffle, not a permutation test.
+	seen := map[string]bool{}
+	for range 40 {
+		seen[newMgr().apiServerURLs[1].Host] = true
+	}
+	require.Len(t, seen, 2, "tier members must be shuffled per-process, not fixed")
+}

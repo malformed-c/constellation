@@ -290,3 +290,34 @@ func TestAgentDaemonSet_LabelDomain(t *testing.T) {
 			"no argument may still reference the old label domain")
 	}
 }
+
+// TestAgentDaemonSet_K8sAPIServerURLTiers verifies the chart renders the TIERED
+// form: a nested list becomes ONE --k8s-api-server-urls value with its members
+// space-joined (the agent splits on whitespace to recover the tier), while a
+// bare string stays a one-member tier. Getting this wrong is silent - the agent
+// would simply treat every URL as its own tier and lose the load spreading.
+func TestAgentDaemonSet_K8sAPIServerURLTiers(t *testing.T) {
+	spec := renderAgentDaemonSet(t,
+		"--set", "k8sAPIServerURLs[0]=https://127.0.0.1:6443",
+		"--set", "k8sAPIServerURLs[1][0]=https://10.0.0.1:6443",
+		"--set", "k8sAPIServerURLs[1][1]=https://10.0.0.2:6443",
+		"--set", "k8sAPIServerURLs[2]=https://192.168.100.200:6443",
+	)
+	args := toStringSlice(findByName(t, spec["containers"].([]any), "agent")["args"])
+
+	require.Contains(t, args, "--k8s-api-server-urls=https://127.0.0.1:6443")
+	require.Contains(t, args, "--k8s-api-server-urls=https://10.0.0.1:6443 https://10.0.0.2:6443",
+		"a nested list must render as ONE flag value, space-joined")
+	require.Contains(t, args, "--k8s-api-server-urls=https://192.168.100.200:6443")
+
+	// Tier order must survive templating.
+	i0 := indexOf(args, "--k8s-api-server-urls=https://127.0.0.1:6443")
+	i1 := indexOf(args, "--k8s-api-server-urls=https://10.0.0.1:6443 https://10.0.0.2:6443")
+	i2 := indexOf(args, "--k8s-api-server-urls=https://192.168.100.200:6443")
+	require.Less(t, i0, i1)
+	require.Less(t, i1, i2)
+
+	// The members must NOT have been emitted as separate tiers.
+	require.NotContains(t, args, "--k8s-api-server-urls=https://10.0.0.1:6443",
+		"tier members must not be split into one flag each - that loses the tier")
+}
