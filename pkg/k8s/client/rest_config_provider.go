@@ -56,7 +56,8 @@ func (m K8sServiceEndpointMapping) Equal(other K8sServiceEndpointMapping) bool {
 // Bootstrap: It parses the user provided configuration which may include multiple API server URLs. In case of multiple
 // API servers, it wraps the rest configuration with an HTTP RoundTripper that enables updating the remote host while
 // making API requests to the kube-apiserver. It also asynchronously monitors kube-apiserver service and endpoints related updates.
-// Initially an active kube-apiserver URL is picked at random, and servers are manually rotated on connectivity failures.
+// The list is an ORDERED PREFERENCE list in this fork (upstream picks at random): the first entry is used at startup and
+// later entries are fallbacks, tried in configured order on connectivity failures. See rotateAPIServerURL for why.
 //
 // Runtime: After the agent's initial sync with the kube-apiserver, when the manager receives updates for the kube-apiserver
 // service, it switches over to the service address as the remote host set in the rest configuration. Thereafter, manual
@@ -128,7 +129,9 @@ func (r *restConfigManager) disconnectFromService() {
 	// something to rotate to.
 	restored := false
 	if len(r.configuredAPIServerURLs) > 0 {
-		r.apiServerURLs = append([]*url.URL(nil), r.configuredAPIServerURLs...)
+		// Deep copy again on the way out, so the pristine configured list
+		// survives any later in-place mutation of the active one.
+		r.apiServerURLs = cloneURLs(r.configuredAPIServerURLs)
 		restored = true
 	}
 	r.Unlock()
@@ -184,8 +187,11 @@ func restConfigManagerInit(cfg Config, name string, log *slog.Logger) (*restConf
 		return nil, err
 	}
 	if manager.canRotateAPIServerURL() {
-		// Pick an API server at random.
-		manager.rotateAPIServerURL()
+		// Start on the operator's FIRST choice. Upstream rotated here (i.e.
+		// picked at random); with an ordered preference list that would mean
+		// never using the preferred entry at startup, which is the opposite
+		// of what the list now means.
+		manager.selectPreferredAPIServerURL()
 
 		// Restore the mappings from disk.
 		manager.restoreFromDisk()
@@ -242,31 +248,74 @@ func (r *restConfigManager) createConfig(cfg Config, userAgent string) (*rest.Co
 	return config, nil
 }
 
+// parseConfig builds the API server candidate list from --k8s-api-server-urls.
+//
+// The list is TIERED. Each flag value is one tier, and a value may hold several
+// whitespace-separated URLs which share that tier:
+//
+//	--k8s-api-server-urls=https://127.0.0.1:6443
+//	--k8s-api-server-urls="https://10.0.0.1:6443 https://10.0.0.2:6443"
+//	--k8s-api-server-urls=https://192.168.100.200:6443
+//
+// Tiers are tried in the order given (see rotateAPIServerURL); members WITHIN a
+// tier are equally preferred, so they are shuffled per-process here. That gives
+// both properties at once: a strict preference between tiers ("wired before
+// wireless"), and load spreading across genuinely equivalent API servers, which
+// is what upstream's blanket randomisation was for. Flattening the tiers into
+// one ordered slice means every downstream user - createConfig's [0],
+// canRotateAPIServerURL's len check, updateMappings' wholesale replacement -
+// keeps working unchanged.
+//
+// Whitespace is the intra-tier separator because pflag's StringSlice already
+// splits values on commas, so a comma cannot mean "same tier" here.
 func (r *restConfigManager) parseConfig(cfg Config) {
-	for _, apiServerURL := range cfg.K8sAPIServerURLs {
-		if apiServerURL == "" {
-			continue
+	for _, tierSpec := range cfg.K8sAPIServerURLs {
+		var tier []*url.URL
+
+		for _, apiServerURL := range strings.Fields(tierSpec) {
+			if !strings.HasPrefix(apiServerURL, "http") && !strings.HasPrefix(apiServerURL, "https") {
+				apiServerURL = fmt.Sprintf("https://%s", apiServerURL)
+			}
+
+			serverURL, err := url.Parse(apiServerURL)
+			if err != nil {
+				r.log.Error("Failed to parse APIServerURL, skipping",
+					logfields.Error, err,
+					logfields.URL, apiServerURL,
+				)
+				continue
+			}
+
+			tier = append(tier, serverURL)
 		}
 
-		if !strings.HasPrefix(apiServerURL, "http") && !strings.HasPrefix(apiServerURL, "https") {
-			apiServerURL = fmt.Sprintf("https://%s", apiServerURL)
+		// Equal preference within a tier: shuffle so that N agents starting
+		// together do not all land on the same member.
+		if len(tier) > 1 {
+			rand.Shuffle(len(tier), func(i, j int) { tier[i], tier[j] = tier[j], tier[i] })
 		}
-
-		serverURL, err := url.Parse(apiServerURL)
-		if err != nil {
-			r.log.Error("Failed to parse APIServerURL, skipping",
-				logfields.Error, err,
-				logfields.URL, apiServerURL,
-			)
-			continue
-		}
-
-		r.apiServerURLs = append(r.apiServerURLs, serverURL)
+		r.apiServerURLs = append(r.apiServerURLs, tier...)
 	}
 
 	// Keep the configured list intact for disconnectFromService(). This must
-	// be a copy: apiServerURLs is reassigned wholesale on service switchover.
-	r.configuredAPIServerURLs = append([]*url.URL(nil), r.apiServerURLs...)
+	// be a DEEP copy, not append(nil, ...): rotateAPIServerURL aliases an
+	// element of apiServerURLs into rt.apiServerURL, and updateMappings then
+	// mutates that object in place (`rt.apiServerURL.Host = mapping.Service`).
+	// A shallow copy shares those pointers, so switchover would rewrite the
+	// "configured" entry to the service address and restoring it would hand
+	// back the very address we are trying to escape.
+	r.configuredAPIServerURLs = cloneURLs(r.apiServerURLs)
+}
+
+// cloneURLs returns a deep copy, so callers cannot mutate the originals
+// through the returned slice (see parseConfig for why that matters).
+func cloneURLs(in []*url.URL) []*url.URL {
+	out := make([]*url.URL, 0, len(in))
+	for _, u := range in {
+		c := *u
+		out = append(out, &c)
+	}
+	return out
 }
 
 func setConfig(config *rest.Config, userAgent string, qps float32, burst int) {
@@ -281,6 +330,23 @@ func setConfig(config *rest.Config, userAgent string, qps float32, burst int) {
 	}
 }
 
+// rotateAPIServerURL advances to the NEXT --k8s-api-server-urls entry in the
+// order the operator configured, wrapping at the end.
+//
+// Upstream picks at random here, which spreads load when the URLs are distinct
+// API servers. In this fork they are typically several NETWORK PATHS TO THE
+// SAME control plane (a KAS built with plural --bind-addresses: loopback, a
+// wired LAN address, a wireless one), so there is no load to spread and random
+// selection instead means each agent start lands on an arbitrary path. That
+// cost is real and was measured: agents landing on the wireless address were
+// implicated in leader-election churn elsewhere on this cluster, and list order
+// could not express "prefer the wired path" because order was ignored.
+//
+// Ordered rotation makes the list a PREFERENCE list - first entry is used at
+// startup, later ones are fallbacks tried in turn on failure - which is what a
+// list normally means and what the values.yaml comment can now honestly say.
+// The trade-off, stated so it is not rediscovered: on a genuine multi-apiserver
+// deployment every agent now prefers the same first entry instead of spreading.
 func (r *restConfigManager) rotateAPIServerURL() {
 	if len(r.apiServerURLs) <= 1 {
 		return
@@ -288,18 +354,51 @@ func (r *restConfigManager) rotateAPIServerURL() {
 
 	r.rt.Lock()
 	defer r.rt.Unlock()
-	for {
-		idx := rand.IntN(len(r.apiServerURLs))
-		if r.rt.apiServerURL != r.apiServerURLs[idx] {
-			r.rt.apiServerURL = r.apiServerURLs[idx]
-			break
+
+	// Find where we are and step one on. Compare by value, not pointer: the
+	// active list is replaced wholesale on switchover and restore, so pointer
+	// identity does not survive. An unknown current URL (nil, or the service
+	// address after a disconnect) falls through to index 0 - the most
+	// preferred entry - which is the right place to resume from.
+	next := 0
+	if cur := r.rt.apiServerURL; cur != nil {
+		for i, u := range r.apiServerURLs {
+			if u.String() == cur.String() {
+				next = (i + 1) % len(r.apiServerURLs)
+				break
+			}
 		}
 	}
+	r.rt.apiServerURL = r.apiServerURLs[next]
+
 	r.Lock()
 	r.restConfig.Host = r.rt.apiServerURL.String()
 	r.Unlock()
 	r.log.Info("Rotated api server",
 		logfields.URL, r.rt.apiServerURL,
+		logfields.Index, next,
+	)
+}
+
+// selectPreferredAPIServerURL points the client at the FIRST configured URL.
+// Used at startup: rt.apiServerURL begins nil and RoundTrip dereferences it, so
+// something must set it, and with an ordered list that something must be the
+// most-preferred entry rather than a rotation off it.
+func (r *restConfigManager) selectPreferredAPIServerURL() {
+	if len(r.apiServerURLs) == 0 {
+		return
+	}
+
+	r.rt.Lock()
+	r.rt.apiServerURL = r.apiServerURLs[0]
+	r.rt.Unlock()
+
+	r.Lock()
+	r.restConfig.Host = r.apiServerURLs[0].String()
+	r.Unlock()
+
+	r.log.Info("Selected preferred api server",
+		logfields.URL, r.apiServerURLs[0],
 	)
 }
 

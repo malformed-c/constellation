@@ -76,8 +76,20 @@ spec:
             {{- if .Values.managedPawnsSelector }}
             - --managed-pawns-selector={{ .Values.managedPawnsSelector }}
             {{- end }}
+            {{- /*
+              Each entry is one TIER, tried in order. A nested list is a tier
+              whose members are equally preferred - joined with spaces here
+              because the agent splits a flag value on whitespace to recover
+              the tier (a comma cannot be used: pflag already splits on it).
+              A bare string is just a one-member tier, so flat lists keep
+              working unchanged.
+            */}}
             {{- range .Values.k8sAPIServerURLs }}
+            {{- if kindIs "slice" . }}
+            - --k8s-api-server-urls={{ join " " . }}
+            {{- else }}
             - --k8s-api-server-urls={{ . }}
+            {{- end }}
             {{- end }}
             {{- if gt (int .Values.mtu) 0 }}
             - --mtu={{ .Values.mtu }}

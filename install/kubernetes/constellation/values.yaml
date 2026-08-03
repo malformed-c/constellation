@@ -22,11 +22,34 @@ k8sServicePort: "6443"
 # clusters where the control plane binds several interfaces (e.g. a
 # control-plane-colocated node reachable on 127.0.0.1 as well as a shared
 # LAN address reachable from every node). Wires into Cilium's own built-in
-# --k8s-api-server-urls: agent picks one at random, retries the others on
-# connection failure, and keeps re-checking /readyz at runtime - so this
+# --k8s-api-server-urls, and keeps re-checking /readyz at runtime - so this
 # needs no per-node detection logic of its own, unlike k8sServiceHost above
 # which is a single value used as the KUBERNETES_SERVICE_HOST fallback.
-#   --set k8sAPIServerURLs[0]=https://192.168.100.200:6443 --set k8sAPIServerURLs[1]=https://192.168.50.1:6443
+#
+# ORDER MATTERS in this fork, and the list is TIERED. Each entry is one tier,
+# tried in order: the agent starts on tier 1 and falls back down the list on
+# connection failure. (Upstream Cilium picks at random; that spreads load
+# across distinct API servers, but here the entries are usually several
+# network paths to the SAME control plane, so there is no load to spread and
+# random selection just means an arbitrary path per agent start.)
+#
+# A tier may be a NESTED LIST whose members are equally preferred - the agent
+# shuffles within a tier per-process, so N agents starting together spread
+# across genuinely equivalent API servers while still honouring the tier
+# order. That gives both properties at once:
+#
+#   k8sAPIServerURLs:
+#     - https://127.0.0.1:6443                                    # tier 1: local
+#     - [https://10.0.0.1:6443, https://10.0.0.2:6443]            # tier 2: HA pair, spread
+#     - https://192.168.100.200:6443                              # tier 3: last resort
+#
+# A bare string is just a one-member tier, so a flat list behaves exactly as
+# a strict preference order. Put the cheapest/most reliable path first - e.g.
+# a wired LAN address ahead of a wireless one. An entry that is wrong for a
+# given host (loopback on a node that is not the control plane) fails fast
+# and rotates on, so one cluster-wide list can still suit hosts whose best
+# path differs.
+#   --set k8sAPIServerURLs[0]=https://192.168.50.1:6443 --set k8sAPIServerURLs[1]=https://192.168.100.200:6443
 k8sAPIServerURLs: []
 
 # Agent runs on nodes matching nodeSelector, and (for the Constellation fork's
