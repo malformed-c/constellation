@@ -67,9 +67,15 @@ func (m K8sServiceEndpointMapping) Equal(other K8sServiceEndpointMapping) bool {
 // different from the ones configured during initial bootstrap as those kube-apiservers may all have been rotated while
 // the agent was down.
 type restConfigManager struct {
-	restConfig           *rest.Config
-	apiServerURLs        []*url.URL
-	isConnectedToService bool
+	restConfig    *rest.Config
+	apiServerURLs []*url.URL
+	// configuredAPIServerURLs is the operator-supplied --k8s-api-server-urls
+	// list, kept verbatim. apiServerURLs is REPLACED by the kube-apiserver
+	// service's endpoints on switchover (see updateMappings), which throws
+	// the configured list away - so without this copy there is nothing to
+	// fall back to when the service address later stops working.
+	configuredAPIServerURLs []*url.URL
+	isConnectedToService    bool
 	lock.RWMutex
 	log *slog.Logger
 	rt  *rotatingHttpRoundTripper
@@ -110,10 +116,46 @@ func (r *restConfigManager) disconnectFromService() {
 	r.Lock()
 	wasConnected := r.isConnectedToService
 	r.isConnectedToService = false
+
+	// Clearing the latch is NOT sufficient on its own, and this was the half
+	// missing from the original fix. updateMappings() replaces apiServerURLs
+	// with the service's ENDPOINTS on switchover, discarding the configured
+	// list. On a single-apiserver cluster that leaves exactly one entry, so
+	// canRotateAPIServerURL()'s `len(apiServerURLs) > 1` stays false and no
+	// rotation can ever happen no matter what the latch says - observed live
+	// on engifire, where the un-latch fired once and the agent then dialled a
+	// dead ClusterIP 158595 times. Restore the configured list so there is
+	// something to rotate to.
+	restored := false
+	if len(r.configuredAPIServerURLs) > 0 {
+		r.apiServerURLs = append([]*url.URL(nil), r.configuredAPIServerURLs...)
+		restored = true
+	}
 	r.Unlock()
 
-	if wasConnected {
-		r.log.Warn("Lost connectivity to kubeapi service address, falling back to manual API server rotation")
+	if !wasConnected {
+		return
+	}
+
+	r.log.Warn("Lost connectivity to kubeapi service address, falling back to manual API server rotation",
+		logfields.Count, len(r.configuredAPIServerURLs),
+	)
+
+	// rotateAPIServerURL() returns early when only one URL is configured, so
+	// with a single configured apiserver nothing would move the host off the
+	// dead service address. Point it back explicitly.
+	if restored && len(r.configuredAPIServerURLs) == 1 {
+		r.rt.Lock()
+		r.rt.apiServerURL = r.configuredAPIServerURLs[0]
+		r.rt.Unlock()
+
+		r.Lock()
+		r.restConfig.Host = r.configuredAPIServerURLs[0].String()
+		r.Unlock()
+
+		r.log.Info("Restored single configured api server",
+			logfields.URL, r.configuredAPIServerURLs[0],
+		)
 	}
 }
 
@@ -221,6 +263,10 @@ func (r *restConfigManager) parseConfig(cfg Config) {
 
 		r.apiServerURLs = append(r.apiServerURLs, serverURL)
 	}
+
+	// Keep the configured list intact for disconnectFromService(). This must
+	// be a copy: apiServerURLs is reassigned wholesale on service switchover.
+	r.configuredAPIServerURLs = append([]*url.URL(nil), r.apiServerURLs...)
 }
 
 func setConfig(config *rest.Config, userAgent string, qps float32, burst int) {
