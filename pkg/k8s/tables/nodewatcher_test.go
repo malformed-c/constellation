@@ -134,3 +134,64 @@ func TestDiscoverManagedNodes_FailsFastOnTerminalErrors(t *testing.T) {
 		})
 	}
 }
+
+// rotatingFake carries the optional rotation hook alongside the normal fake,
+// modelling a tier list whose current candidate can be advanced. Tier 1 is
+// wrong for this host and never starts answering; only rotating reaches a
+// candidate that does.
+type rotatingFake struct {
+	*k8sTestUtils.FakeClientset
+	rotations atomic.Int32
+	reachable atomic.Bool
+}
+
+func (f *rotatingFake) RotateAPIServerURL() bool {
+	f.rotations.Add(1)
+	f.reachable.Store(true)
+	return true
+}
+
+// A tier-1 URL that is flat wrong for this host — loopback on a node that is
+// not the control plane — is not merely late: no amount of retrying reaches it.
+// Discovery must fall through to the next candidate.
+func TestDiscoverManagedNodes_FallsThroughToNextAPIServerTier(t *testing.T) {
+	shortenDiscoveryRetries(t, 5*time.Second, time.Millisecond)
+
+	inner, _ := newDiscoveryFake(t)
+	fake := &rotatingFake{FakeClientset: inner}
+	require.NoError(t, inner.SlimFakeClientset.Tracker().Add(&slim_corev1.Node{
+		ObjectMeta: slim_metav1.ObjectMeta{
+			Name:   "pawn-a",
+			Labels: map[string]string{"peri.apsis/host": "engix99"},
+		},
+	}))
+	inner.SlimFakeClientset.PrependReactor("list", "nodes",
+		func(k8sTesting.Action) (bool, runtime.Object, error) {
+			if !fake.reachable.Load() {
+				return true, nil, errUnreachable
+			}
+			return false, nil, nil
+		})
+
+	var cs k8sclient.Clientset = fake
+	names, err := discoverManagedNodesWithRetry(context.Background(), cs, "peri.apsis/host")
+	require.NoError(t, err)
+	require.Equal(t, []string{"pawn-a"}, names)
+	require.EqualValues(t, 1, fake.rotations.Load(), "should have fallen through exactly once")
+}
+
+// Terminal errors would be identical on every candidate, so burning through the
+// tier list on them only obscures the real cause.
+func TestDiscoverManagedNodes_DoesNotRotateOnTerminalError(t *testing.T) {
+	shortenDiscoveryRetries(t, time.Minute, time.Second)
+
+	inner, _ := newDiscoveryFake(t)
+	fake := &rotatingFake{FakeClientset: inner}
+	failNodeListTimes(inner, math.MaxInt32,
+		k8serrors.NewForbidden(schema.GroupResource{Resource: "nodes"}, "", errors.New("denied")))
+
+	var cs k8sclient.Clientset = fake
+	_, err := discoverManagedNodesWithRetry(context.Background(), cs, "peri.apsis/host")
+	require.Error(t, err)
+	require.EqualValues(t, 0, fake.rotations.Load(), "must not rotate on a terminal error")
+}

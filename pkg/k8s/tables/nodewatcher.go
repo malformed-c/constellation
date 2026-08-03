@@ -223,11 +223,36 @@ var (
 	managedNodeDiscoveryInterval = 5 * time.Second
 )
 
+// fieldRotated records whether a failed discovery attempt fell through to the
+// next API server candidate. Local rather than added to logfields, to keep this
+// fork from diverging in an upstream file over one key.
+const fieldRotated = "rotated"
+
+// apiServerRotator is implemented by the real clientset (see
+// pkg/k8s/client/rotate.go). It is an optional interface rather than part of
+// the exported Clientset interface so that neither upstream's cell.go nor its
+// test fake has to carry a fork-only method.
+type apiServerRotator interface {
+	// RotateAPIServerURL advances to the next configured API server
+	// candidate, reporting whether it did.
+	RotateAPIServerURL() bool
+}
+
 // discoverManagedNodesWithRetry calls discoverManagedNodes, retrying while the
-// API server is unreachable. Errors caused by the request itself rather than by
-// the connection (a malformed selector, or missing RBAC) are returned
-// immediately — they will not fix themselves, and stalling on them for minutes
-// would hide the real cause.
+// API server is unreachable and falling through to the next configured API
+// server candidate on each failure.
+//
+// The fall-through is why this cannot simply wait: --k8s-api-server-urls is a
+// tier-ordered preference list, and tier 1 may be flat wrong for this
+// particular host (a loopback address on a node that is not the control plane)
+// rather than merely late. Without rotation such a host never starts, no matter
+// how long it retries. Upstream's own connection loop would rotate, but it runs
+// from a start hook, after this.
+//
+// Errors caused by the request itself rather than by the connection (a
+// malformed selector, or missing RBAC) are returned immediately — they will not
+// fix themselves, they would be identical on every candidate, and stalling on
+// them for minutes would hide the real cause.
 //
 // Note that a selector matching no nodes is not an error; see
 // discoverManagedNodes.
@@ -244,9 +269,19 @@ func discoverManagedNodesWithRetry(ctx context.Context, cs client.Clientset, sel
 			return nil, err
 		}
 
+		// Fall through to the next candidate before sleeping, so the next
+		// attempt is against a different API server rather than the same
+		// unreachable one. Reports false when there is nothing to fall
+		// through to (a single configured URL), which is a plain retry.
+		rotated := false
+		if r, ok := cs.(apiServerRotator); ok {
+			rotated = r.RotateAPIServerURL()
+		}
+
 		nodeWatcherLog.Warn("Managed node discovery failed, retrying",
 			logfields.Selector, selector,
 			logfields.Attempt, attempt,
+			fieldRotated, rotated,
 			logfields.Error, err)
 
 		select {
