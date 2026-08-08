@@ -86,6 +86,30 @@ tunnelEndpointOverrides: ""
 # so the periapsis agent can detect idle pods and trap wake SYNs.
 enableScaleToZeroDatapath: false
 
+# Fraction of host RAM the agent budgets for the dynamically-sized BPF maps
+# (CT, NAT, neigh, sock-rev). Set explicitly rather than left to the agent's
+# own 0.0025 default, so the figure is visible and proportionate on every host
+# instead of being rediscovered per-overlay.
+#
+# The default matches the agent's own 0.0025 - stated here rather than
+# inherited, so it is visible and reviewable. Raise it per-deployment (see
+# examples/inventx-values.yaml) rather than by writing a literal into
+# agent.extraArgs, which silently overrides this without changing what the
+# chart says.
+#
+# It is a RATIO, so it self-scales and one value suits any host size. Do NOT
+# copy a large value from a big machine onto a small one - inventx ran 0.15 on
+# a 7.7 GiB node, which claimed 2.1 GiB (27% of the box) permanently and
+# evicted pods for two days.
+#
+# The ratio is NOT a memory cap. It budgets an entry count, which is then split
+# across map types and rounded up per possible-CPU for distributed LRU, so real
+# memlock lands roughly 1.8x above ratio*RAM. Measure, do not assume.
+#
+# Too LOW is not free either: undersized CT/NAT tables drop established
+# connections under load, which is far quieter than an eviction.
+bpfMapDynamicSizeRatio: 0.0025
+
 # cluster-pool IPAM (operator allocates per-node PodCIDRs from this pool).
 clusterPool:
   cidr: 10.0.0.0/8

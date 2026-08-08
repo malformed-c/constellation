@@ -101,6 +101,7 @@ spec:
             - --enable-ipv6=false
             - --enable-bpf-masquerade=true
             - --bpf-lb-sock-hostns-only=true
+            - --bpf-map-dynamic-size-ratio={{ .Values.bpfMapDynamicSizeRatio }}
             {{- if .Values.managedPawnsSelector }}
             - --managed-pawns-selector={{ .Values.managedPawnsSelector }}
             {{- end }}

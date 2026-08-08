@@ -1,3 +1,12 @@
+# Raised above the chart default of 0.0025: this node runs a much larger pod
+# count than its 7.7 GiB warrants, so the CT/NAT tables need headroom. 0.025
+# budgets ~198 MiB and costs ~350 MiB of real memlock (~4.5% of the box).
+#
+# It was 0.15 until 2026-08-04, which claimed ~2.1 GiB - 27% of the machine,
+# permanently - and evicted pods for two days. Do not raise it without
+# measuring actual memlock afterwards; the ratio is not a memory cap.
+bpfMapDynamicSizeRatio: 0.025
+
 # InventX overlay for the Constellation chart — ported from the inventx Terraform
 # (plans/cilium-ix-values.yaml.tmpl, upstream Cilium chart). Maps each inventx
 # Cilium setting to a verified cilium-agent flag (checked against the v1.20 agent
@@ -38,8 +47,10 @@ agent:
     # datapath: netkit, no host legacy routing.
     - --datapath-mode=netkit
     - --enable-host-legacy-routing=false
-    # bpf map sizing + distributed LRU + clock probe.
-    - --bpf-map-dynamic-size-ratio=0.15
+    # distributed LRU + clock probe. The map size ratio is NOT set here - it
+    # is bpfMapDynamicSizeRatio at the top of this file. A literal in
+    # extraArgs renders after the base args and silently wins over the chart
+    # value, which is how the old 0.15 survived unnoticed.
     - --bpf-distributed-lru=true
     - --enable-bpf-clock-probe=true
     # bandwidth manager + BBR (host-ns only).
