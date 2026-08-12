@@ -100,6 +100,34 @@ func (r *restConfigManager) canRotateAPIServerURL() bool {
 	return len(r.apiServerURLs) > 1 && !r.isConnectedToService
 }
 
+// shouldApplyMapping decides whether the frontend watcher applies the
+// kubernetes service mapping.
+//
+// Applying it on CHANGE alone is not enough. isConnectedToService is cleared by
+// disconnectFromService() when the heartbeat loses the service address, and
+// updateMappings() is the only thing that sets it again - so if the service
+// then recovers with the identical frontend and backends, which is the ordinary
+// case after a blip, the mapping never "changes", the latch is never re-armed,
+// and the agent stays on manually rotated direct URLs for the rest of the
+// process lifetime, silently abandoning the datapath load balancing that the
+// switchover exists to obtain.
+func shouldApplyMapping(mapping, previous K8sServiceEndpointMapping, disconnected bool) bool {
+	return !mapping.Equal(previous) || disconnected
+}
+
+// How often to retry switching back to the kube-apiserver service address
+// while disconnected from it. Only used on that path: when connected, the
+// frontend watch drives updates and nothing polls.
+const serviceReconnectInterval = 30 * time.Second
+
+// connectedToService reports whether the client is currently switched over to
+// the kube-apiserver service address.
+func (r *restConfigManager) connectedToService() bool {
+	r.RLock()
+	defer r.RUnlock()
+	return r.isConnectedToService
+}
+
 // disconnectFromService un-latches isConnectedToService, so a subsequent
 // canRotateAPIServerURL call can return true again. Without this, once
 // isConnectedToService is set the manager can never manually rotate away
@@ -598,22 +626,59 @@ func registerMappingsUpdater(p mappingUpdaterParams) {
 						p.DB.ReadTxn(),
 						loadbalancer.FrontendByServiceName(loadbalancer.NewServiceName(
 							"default", "kubernetes")))
+
+					// isConnectedToService is cleared by disconnectFromService()
+					// when the heartbeat loses the service address, and
+					// updateMappings() is the only thing that sets it again. So
+					// re-graduation must not depend solely on the mapping
+					// CHANGING: after a blip the service typically comes back
+					// with the identical frontend and backends, mapping.Equal
+					// (previous) holds, and the agent would stay on manually
+					// rotated direct URLs for the rest of the process lifetime
+					// - silently abandoning the datapath load balancing this
+					// switchover exists to get.
+					disconnected := !p.Manager.connectedToService()
+
 					if found {
 						mapping := frontendToMapping(fe)
-						if !mapping.Equal(previous) {
+						if shouldApplyMapping(mapping, previous, disconnected) {
 							previous = mapping
 							log.Info("updating kubernetes service mapping",
 								logfields.Entry, mapping,
+								logfields.Reason, reconnectReason(disconnected),
 							)
+							// No-ops if the service still isn't reachable:
+							// updateMappings checks connectivity first.
 							p.Manager.updateMappings(mapping)
-
 						}
+					}
+
+					// While disconnected the mapping is by definition not
+					// changing, so the watch channel alone would never fire and
+					// nothing would re-evaluate. Wake periodically instead.
+					var (
+						reconnect <-chan time.Time
+						timer     *time.Timer
+					)
+					if disconnected {
+						// Not deferred: this loop runs for the lifetime of the
+						// agent, so a deferred Stop would accumulate one timer
+						// per iteration and never fire until the job exits.
+						timer = time.NewTimer(serviceReconnectInterval)
+						reconnect = timer.C
 					}
 
 					select {
 					case <-ctx.Done():
+						if timer != nil {
+							timer.Stop()
+						}
 						return nil
 					case <-watch:
+					case <-reconnect:
+					}
+					if timer != nil {
+						timer.Stop()
 					}
 				}
 			}))
@@ -626,4 +691,14 @@ func frontendToMapping(fe *loadbalancer.Frontend) K8sServiceEndpointMapping {
 		mapping.Endpoints = append(mapping.Endpoints, be.Address.AddrString())
 	}
 	return mapping
+}
+
+// reconnectReason labels why the kubernetes service mapping is being applied,
+// so a re-graduation after losing the service address is distinguishable in
+// the log from an ordinary mapping change.
+func reconnectReason(disconnected bool) string {
+	if disconnected {
+		return "reconnect-after-disconnect"
+	}
+	return "mapping-changed"
 }

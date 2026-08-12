@@ -1192,3 +1192,76 @@ func Test_clientProvidedClientsetSupportsRotation(t *testing.T) {
 	_, ok := cs.(interface{ RotateAPIServerURL() bool })
 	require.True(t, ok, "the concrete type provided as Clientset must carry the rotation hook")
 }
+
+// isConnectedToService is set only by updateMappings and cleared only by
+// disconnectFromService. Before disconnectFromService existed the latch was
+// deliberately one-way, so nothing ever needed to re-arm it; adding the
+// un-latch created a state that must be recoverable.
+//
+// The trap: the frontend watcher only calls updateMappings when the mapping
+// CHANGES. After a blip the kubernetes service almost always returns with the
+// identical frontend and backends, so a re-graduation gated purely on change
+// never fires and the agent stays on manually rotated direct URLs for the rest
+// of the process lifetime - silently giving up the datapath load balancing the
+// switchover exists to obtain.
+func Test_clientServiceLatchReArmsAfterDisconnect(t *testing.T) {
+	// updateMappings dials the service before latching (checkConnToService),
+	// so the "service" has to actually answer.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/version" {
+			w.Write([]byte(`{"major": "1", "minor": "99"}`))
+			return
+		}
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	m := &restConfigManager{
+		log:        hivetest.Logger(t),
+		rt:         &rotatingHttpRoundTripper{log: hivetest.Logger(t)},
+		restConfig: &rest.Config{},
+	}
+	m.parseConfig(Config{SharedConfig: SharedConfig{K8sAPIServerURLs: []string{
+		"https://10.0.0.1:6443", "https://10.0.0.2:6443",
+	}}})
+	m.selectPreferredAPIServerURL()
+
+	// Two endpoints, so the restored list is not what re-enables rotation here
+	// - this test is about the latch, not the list length.
+	mapping := K8sServiceEndpointMapping{
+		Service:   srv.URL,
+		Endpoints: []string{"10.0.0.1:6443", "10.0.0.2:6443"},
+	}
+
+	m.updateMappings(mapping)
+	require.True(t, m.connectedToService(), "should be latched after switchover")
+
+	m.disconnectFromService()
+	require.False(t, m.connectedToService(), "latch must clear on disconnect")
+
+	// The service recovers UNCHANGED - same frontend, same backends, which is
+	// the ordinary case after a blip.
+	m.updateMappings(mapping)
+	require.True(t, m.connectedToService(),
+		"re-applying an identical mapping must re-arm the latch; otherwise the "+
+			"agent never returns to the service address for the rest of its life")
+}
+
+// The watcher's decision to (re)apply the mapping. The re-arm case - identical
+// mapping while disconnected - is the one that matters: the kubernetes service
+// almost always returns from a blip with the same frontend and backends, so a
+// change-only rule leaves the agent permanently off the service address.
+func Test_clientShouldApplyMapping(t *testing.T) {
+	a := K8sServiceEndpointMapping{Service: "10.96.0.1:443", Endpoints: []string{"10.0.0.1:6443"}}
+	b := K8sServiceEndpointMapping{Service: "10.96.0.1:443", Endpoints: []string{"10.0.0.2:6443"}}
+
+	require.True(t, shouldApplyMapping(a, b, false), "a changed mapping is applied")
+	require.False(t, shouldApplyMapping(a, a, false),
+		"an unchanged mapping while connected is a no-op; re-dialling on every "+
+			"watch wakeup would cost a connectivity probe each time")
+	require.True(t, shouldApplyMapping(a, a, true),
+		"IDENTICAL mapping while disconnected MUST re-apply - this is the re-arm, "+
+			"and without it the latch never returns to true")
+	require.True(t, shouldApplyMapping(a, b, true), "changed and disconnected also applies")
+}
