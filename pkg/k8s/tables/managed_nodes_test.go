@@ -13,7 +13,6 @@ package tables
 import (
 	"context"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +27,7 @@ import (
 	k8sTestUtils "github.com/cilium/cilium/pkg/k8s/client/testutils"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
+	"github.com/cilium/cilium/pkg/lock"
 
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
@@ -539,7 +539,7 @@ func TestNodeAddedCallback_FiredOnDynamicAdd(t *testing.T) {
 
 	// Register a callback that records added node names.
 	var (
-		mu    sync.Mutex
+		mu    lock.Mutex
 		added []string
 	)
 	RegisterNodeAddedCallback(func(name string) {
@@ -579,7 +579,7 @@ func TestNodeAddedCallback_MultipleCallbacks(t *testing.T) {
 	nodeTypes.SetName("host-mcb")
 
 	var (
-		mu     sync.Mutex
+		mu     lock.Mutex
 		count1 int
 		count2 int
 	)

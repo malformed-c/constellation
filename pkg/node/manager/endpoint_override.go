@@ -5,9 +5,12 @@ package manager
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
 	"strings"
+
+	"github.com/vishvananda/netlink"
+
+	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
 )
 
 const (
@@ -88,23 +91,29 @@ func isLocallyReachable(addr netip.Addr) bool {
 // connectedPrefixes returns the IPv4/IPv6 prefixes assigned to local
 // network interfaces (e.g. 192.168.50.2/24 → 192.168.50.0/24).
 func connectedPrefixes() []netip.Prefix {
-	ifaces, err := net.Interfaces()
+	// Not net.Interfaces()/iface.Addrs(): those query the kernel over a
+	// netlink socket with no timeout and can block forever (cilium#15051),
+	// which is why the linter forbids them. safenetlink bounds the call.
+	links, err := safenetlink.LinkList()
 	if err != nil {
 		return nil
 	}
 	var prefixes []netip.Prefix
-	for _, iface := range ifaces {
-		addrs, err := iface.Addrs()
+	for _, link := range links {
+		addrs, err := safenetlink.AddrList(link, netlink.FAMILY_ALL)
 		if err != nil {
 			continue
 		}
 		for _, a := range addrs {
-			if ipnet, ok := a.(*net.IPNet); ok {
-				if addr, ok := netip.AddrFromSlice(ipnet.IP); ok {
-					ones, _ := ipnet.Mask.Size()
-					prefixes = append(prefixes, netip.PrefixFrom(addr.Unmap(), ones).Masked())
-				}
+			if a.IPNet == nil {
+				continue
 			}
+			addr, ok := netip.AddrFromSlice(a.IPNet.IP)
+			if !ok {
+				continue
+			}
+			ones, _ := a.IPNet.Mask.Size()
+			prefixes = append(prefixes, netip.PrefixFrom(addr.Unmap(), ones).Masked())
 		}
 	}
 	return prefixes

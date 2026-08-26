@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
-	"sync"
 
 	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/job"
@@ -42,6 +41,7 @@ import (
 	"github.com/cilium/cilium/pkg/k8s/client"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	"github.com/cilium/cilium/pkg/k8s/utils"
+	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/node/addressing"
@@ -171,7 +171,7 @@ var nodeWatcherLog = logging.DefaultSlogLogger.With(logfields.LogSubsys, "node-w
 type NodeAddedCallback func(nodeName string)
 
 var (
-	nodeAddedCallbackMu sync.Mutex
+	nodeAddedCallbackMu lock.Mutex
 	nodeAddedCallbacks  []NodeAddedCallback
 )
 
@@ -406,7 +406,7 @@ type nodeWatcher struct {
 	pods statedb.RWTable[LocalPod]
 
 	// Track known nodes to detect additions/removals.
-	mu    sync.Mutex
+	mu    lock.Mutex
 	known map[string]struct{}
 }
 

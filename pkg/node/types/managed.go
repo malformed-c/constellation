@@ -10,7 +10,8 @@ package types
 
 import (
 	"slices"
-	"sync"
+
+	"github.com/cilium/cilium/pkg/lock"
 )
 
 var (
@@ -19,7 +20,7 @@ var (
 	// In Constellation (perigeos host sharding) it is populated dynamically
 	// by the node watcher from --managed-pawns-selector.
 	managedNodeNames   []string
-	managedNodeNamesMu sync.RWMutex
+	managedNodeNamesMu lock.RWMutex
 )
 
 // SetManagedNames sets the list of k8s node names whose pods this agent

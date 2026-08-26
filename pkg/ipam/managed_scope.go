@@ -9,8 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
-	"sync"
-	"time"
 
 	"go4.org/netipx"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,8 +17,10 @@ import (
 	"github.com/cilium/cilium/pkg/ipam/service/ipallocator"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/k8s/client"
+	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
+	"github.com/cilium/cilium/pkg/time"
 )
 
 // managedScopeAllocator extends ClusterPool IPAM to support multiple managed
@@ -34,7 +34,7 @@ import (
 type managedScopeAllocator struct {
 	logger *slog.Logger
 
-	mu          sync.Mutex
+	mu          lock.Mutex
 	subs        []*subAllocator // ordered list of sub-allocators
 	subByNode   map[string]*subAllocator
 	primaryNode string // name of the infrastructure/primary node (fallback)
