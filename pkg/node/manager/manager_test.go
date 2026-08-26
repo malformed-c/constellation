@@ -1038,6 +1038,11 @@ func TestNodeManagerEmitStatus(t *testing.T) {
 		}),
 		cell.Module("node_manager", "Node Manager", cell.Provide(New)),
 		cell.Provide(func() cmtypes.ClusterInfo { return cmtypes.DefaultClusterInfo }),
+		// The fork threads a LocalNodeStore into New() so tunnel-endpoint
+		// overrides can tell this host's own nodes from remote ones.
+		cell.Provide(func() *node.LocalNodeStore {
+			return node.NewTestLocalNodeStore(node.LocalNode{})
+		}),
 		cell.Invoke(fn),
 	)
 	l := hivetest.Logger(t, hivetest.LogLevel(slog.LevelDebug))

@@ -62,10 +62,10 @@ func (n *NodeDiscovery) updateManagedCiliumInternalIPs(ctx context.Context, ln *
 	}
 
 	var ingressV4, ingressV6 string
-	if ip := ln.IPv4IngressIP; ip != nil {
+	if ip := ln.IPv4IngressIP; ip.IsValid() {
 		ingressV4 = ip.String()
 	}
-	if ip := ln.IPv6IngressIP; ip != nil {
+	if ip := ln.IPv6IngressIP; ip.IsValid() {
 		ingressV6 = ip.String()
 	}
 

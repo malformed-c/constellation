@@ -190,7 +190,7 @@ func localNodeWithCiliumIP(name, ciliumV4, healthV4, ingressV4 string) *node.Loc
 		ln.IPv4HealthIP = iputil.AddrFrom(netip.MustParseAddr(healthV4))
 	}
 	if ingressV4 != "" {
-		ln.IPv4IngressIP = net.ParseIP(ingressV4)
+		ln.IPv4IngressIP = iputil.AddrFrom(netip.MustParseAddr(ingressV4))
 	}
 	return ln
 }

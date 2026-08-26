@@ -263,7 +263,7 @@ func newTestIPAM(t *testing.T) *IPAM {
 		NodeResource:   &resourceMock{},
 		MTUConfig:      &mtuMock,
 	})
-	ipam.ConfigureAllocator()
+	_ = ipam.ConfigureAllocator(context.TODO())
 	return ipam
 }
 
