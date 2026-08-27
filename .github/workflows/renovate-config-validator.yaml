@@ -1,0 +1,26 @@
+name: Validate Renovate configuration
+
+on:
+  pull_request:
+    paths:
+      # Run on any renovate.json5, not just .github/renovate.json5
+      - '**renovate.json5'
+
+jobs:
+  validate:
+    name: Validate Renovate configuration
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout configuration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # this step uses latest renovate slim release
+      - name: Validate configuration
+        run: |
+          # renovate: datasource=docker
+          export RENOVATE_IMAGE=ghcr.io/renovatebot/renovate:44.39.2@sha256:e6b93e709ca64495ab9307350b260064276ee02d15c6886387fd2d42c926623b
+          docker run --rm --entrypoint "renovate-config-validator" \
+            -v "${{ github.workspace }}/.github/renovate.json5":"/renovate.json5" \
+            ${RENOVATE_IMAGE} "/renovate.json5"
