@@ -9,7 +9,8 @@
 #
 # Datapath features beyond the always-on base (WireGuard encryption, netkit,
 # BBR, PMTU discovery, L2 announcements, ...) are added via agent.extraArgs /
-# operator.extraArgs — see examples/inventx-values.yaml for a full overlay.
+# operator.extraArgs. This chart carries no per-site overlay: deployment
+# values are supplied at install time (-f / --set), not shipped here.
 
 namespace: kube-system
 
@@ -92,15 +93,15 @@ enableScaleToZeroDatapath: false
 # instead of being rediscovered per-overlay.
 #
 # The default matches the agent's own 0.0025 - stated here rather than
-# inherited, so it is visible and reviewable. Raise it per-deployment (see
-# examples/inventx-values.yaml) rather than by writing a literal into
-# agent.extraArgs, which silently overrides this without changing what the
-# chart says.
+# inherited, so it is visible and reviewable. Raise it per-deployment by
+# setting THIS value, never by writing a --bpf-map-dynamic-size-ratio literal
+# into agent.extraArgs: extraArgs render after the base args and silently win,
+# leaving the chart reading one number while the agent runs another.
 #
 # It is a RATIO, so it self-scales and one value suits any host size. Do NOT
-# copy a large value from a big machine onto a small one - inventx ran 0.15 on
-# a 7.7 GiB node, which claimed 2.1 GiB (27% of the box) permanently and
-# evicted pods for two days.
+# copy a large value from a big machine onto a small one - one deployment ran
+# 0.15 on a 7.7 GiB node, which claimed 2.1 GiB (27% of the box) permanently
+# and evicted pods for two days.
 #
 # The ratio is NOT a memory cap. It budgets an entry count, which is then split
 # across map types and rounded up per possible-CPU for distributed LRU, so real
@@ -151,13 +152,12 @@ operator:
   #
   # Defaults to the standard kubeadm location. Any distribution that puts it
   # elsewhere must override BOTH values -- k3s uses /etc/rancher/k3s/k3s.yaml,
-  # and the self-hosted perigeos control plane uses
-  # /etc/kubernetes/constellation/kubeconfig (see examples/inventx-values.yaml).
+  # and a self-hosted perigeos control plane uses its own path.
   #
   # Getting this wrong is not a soft failure: the volume is declared
   # type=Directory, which Kubernetes requires to already exist, so the operator
   # pod cannot start at all. This default was k3s until 2026-09-03 and that
-  # broke inventx, which is neither k3s nor kubeadm -- and a pinned chart
+  # broke a deployment that is neither k3s nor kubeadm -- and a pinned chart
   # version did NOT protect them, because the OCI tag was re-published with the
   # changed default underneath it. Deployments should SET these, not inherit
   # them.

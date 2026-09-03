@@ -58,12 +58,6 @@ func renderAgentDaemonSet(t *testing.T, extraSet ...string) map[string]any {
 	return nil
 }
 
-// renderAgentDaemonSetWithValues renders the chart with an extra values file.
-func renderAgentDaemonSetWithValues(t *testing.T, valuesPath string) map[string]any {
-	t.Helper()
-	return renderAgentDaemonSet(t, "-f", valuesPath)
-}
-
 func findByName(t *testing.T, list []any, name string) map[string]any {
 	t.Helper()
 	for _, item := range list {
@@ -395,10 +389,10 @@ func TestAgentDaemonSet_RpFilterFixDoesNotApplyContainerSysctls(t *testing.T) {
 // chart-level default.
 //
 // This is a RATIO of host RAM, so it self-scales and a single value is right on
-// any host size. Left unset the agent uses 0.0025, which is invisible; the
-// inventx overlay instead carried a hand-written 0.15, and on a 7.7 GiB node
-// that claimed ~2.1 GiB — 27% of the box, permanently — and evicted pods for
-// two days before anyone connected the two. A per-overlay literal is how that
+// any host size. Left unset the agent uses 0.0025, which is invisible; one
+// deployment instead carried a hand-written 0.15, and on a 7.7 GiB node that
+// claimed ~2.1 GiB — 27% of the box, permanently — and evicted pods for two
+// days before anyone connected the two. A hand-written literal is how that
 // happens, so the value lives in values.yaml where it is reviewable.
 func TestAgentDaemonSet_BPFMapDynamicSizeRatio(t *testing.T) {
 	agent := findByName(t, renderAgentDaemonSet(t)["containers"].([]any), "agent")
@@ -411,43 +405,24 @@ func TestAgentDaemonSet_BPFMapDynamicSizeRatio(t *testing.T) {
 	require.Contains(t, toStringSlice(agent["args"]), "--bpf-map-dynamic-size-ratio=0.025")
 }
 
-// The inventx node is the one that got this wrong: 7.7 GiB of RAM running 0.15,
-// which claimed ~2.1 GiB permanently and evicted pods for two days. It needs
-// more than the default but nowhere near that, and the value must arrive as a
-// chart value rather than an extraArgs literal so it stays visible.
-func TestInventxOverlay_ScopedMapSizeRatio(t *testing.T) {
-	agent := findByName(t, renderAgentDaemonSetWithValues(t,
-		filepath.Join("examples", "inventx-values.yaml"))["containers"].([]any), "agent")
-	args := toStringSlice(agent["args"])
-
-	require.Contains(t, args, "--bpf-map-dynamic-size-ratio=0.025")
-	n := 0
-	for _, a := range args {
-		if strings.HasPrefix(a, "--bpf-map-dynamic-size-ratio=") {
-			n++
+// The flag must render exactly ONCE. agent.extraArgs render after the base
+// args, so a --bpf-map-dynamic-size-ratio literal passed that way silently wins
+// while values.yaml keeps reading the chart default and looking correct. The
+// chart cannot stop a deployment doing that -- extraArgs is passthrough by
+// design -- but it can guarantee it is not the chart itself emitting two.
+func TestAgentDaemonSet_MapSizeRatioRendersOnce(t *testing.T) {
+	for _, extra := range [][]string{
+		nil,
+		{"--set", "bpfMapDynamicSizeRatio=0.025"},
+	} {
+		agent := findByName(t, renderAgentDaemonSet(t, extra...)["containers"].([]any), "agent")
+		n := 0
+		for _, a := range toStringSlice(agent["args"]) {
+			if strings.HasPrefix(a, "--bpf-map-dynamic-size-ratio=") {
+				n++
+			}
 		}
-	}
-	require.Equal(t, 1, n, "the flag must render exactly once; a duplicate means "+
-		"an extraArgs literal is silently overriding the chart value")
-}
-
-// Overlays must not re-specify the ratio. agent.extraArgs render AFTER the base
-// args, so a leftover literal there silently wins over the chart default and
-// restores exactly the condition this was introduced to remove — with the chart
-// still reading 0.025 and looking correct.
-func TestAgentDaemonSet_ExtraArgsDoNotOverrideMapSizeRatio(t *testing.T) {
-	examples, err := filepath.Glob(filepath.Join("examples", "*-values.yaml"))
-	require.NoError(t, err)
-	require.NotEmpty(t, examples, "sanity: no example overlays found, this test would pass vacuously")
-
-	for _, path := range examples {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			raw, err := os.ReadFile(path)
-			require.NoError(t, err)
-			require.NotContains(t, string(raw), "--bpf-map-dynamic-size-ratio",
-				"set bpfMapDynamicSizeRatio in values instead; an extraArgs literal "+
-					"overrides the chart default without changing what the chart says")
-		})
+		require.Equal(t, 1, n, "exactly one ratio flag must come from the chart")
 	}
 }
 
@@ -484,9 +459,9 @@ func TestAgentDaemonSet_CNIConfDirMatchesWatchdogDefault(t *testing.T) {
 // host, so a `helm upgrade` would have pointed every agent at addresses that no
 // longer answer. Examples that look authoritative get copied.
 //
-// Site values belong in an overlay (examples/*.yaml) or on the command line,
-// never in the chart. This asserts the chart proper stays neutral; the overlay
-// files are deliberately not scanned, since being site-specific is their job.
+// Site values are supplied at install time (-f / --set) and this chart ships no
+// per-site overlay at all, so everything under the chart directory must stay
+// neutral.
 func TestChart_CarriesNoSiteSpecificValues(t *testing.T) {
 	// Hostnames and address ranges belonging to this particular fleet.
 	fingerprints := []string{
