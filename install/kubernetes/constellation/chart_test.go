@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	yaml "go.yaml.in/yaml/v3"
+
+	"github.com/cilium/cilium/pkg/podendpointwatchdog"
 )
 
 // renderAgentDaemonSet runs `helm template` against this chart and returns
@@ -447,4 +449,27 @@ func TestAgentDaemonSet_ExtraArgsDoNotOverrideMapSizeRatio(t *testing.T) {
 					"overrides the chart default without changing what the chart says")
 		})
 	}
+}
+
+// TestAgentDaemonSet_CNIConfDirMatchesWatchdogDefault couples the chart's CNI
+// config mount to the pod-endpoint watchdog's ownership check.
+//
+// The watchdog only deletes pods on a node whose CNI configuration names
+// cilium-cni; it reads that from podendpointwatchdog.DefaultCNIConfDir. If the
+// chart's mountPath drifts from that path, the directory is simply absent
+// inside the agent, the check returns "not ours", and the watchdog stands down
+// permanently — silently, on every node, while still reporting healthy. The
+// failure of the guard looks exactly like the guard working.
+func TestAgentDaemonSet_CNIConfDirMatchesWatchdogDefault(t *testing.T) {
+	spec := renderAgentDaemonSet(t)
+	agent := findByName(t, spec["containers"].([]any), "agent")
+
+	mount := findByName(t, agent["volumeMounts"].([]any), "cni-conf-dir")
+	require.Equal(t, podendpointwatchdog.DefaultCNIConfDir, mount["mountPath"],
+		"the agent must see its CNI config at the path the watchdog checks")
+
+	vol := findByName(t, spec["volumes"].([]any), "cni-conf-dir")
+	hostPath, _ := vol["hostPath"].(map[string]any)
+	require.Equal(t, podendpointwatchdog.DefaultCNIConfDir, hostPath["path"],
+		"and that must be the host path perigeos writes the conflist to")
 }

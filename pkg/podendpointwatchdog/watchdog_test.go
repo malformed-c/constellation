@@ -73,6 +73,10 @@ func newTestWatchdog(t *testing.T, gracePeriod time.Duration) (*watchdog, stated
 		gracePeriod: gracePeriod,
 		now:         clock.Now,
 		pending:     make(map[k8stypes.UID]time.Time),
+		// Existing tests exercise the healing logic, so they run as a
+		// cilium-managed node. The gate itself is covered separately by
+		// TestCheck_StandsDownWhenNodeUsesAnotherCNI.
+		cniOwned: func() (bool, string) { return true, "test: cilium-managed" },
 	}
 	return w, podTable, db, eps, deleter, clock
 }
@@ -247,4 +251,71 @@ func TestWatchdog_DeleteErrorDoesNotFailCheck(t *testing.T) {
 	require.NoError(t, w.check(context.Background()))
 
 	require.Equal(t, []string{"default/delete-fails"}, deleter.deleted)
+}
+
+// The engifire regression, both arms.
+//
+// On 2026-09-03 the DaemonSet landed on a node where perigeos still ran the
+// kube-router/bridge conflist. No pod there had a Cilium endpoint, so every
+// pod-network pod matched "Running with an IP but no local endpoint" and was
+// deleted; each replacement came back through the same bridge CNI and matched
+// again. Four workloads plus a probe went in about three minutes, then looped.
+//
+// The pods were never broken. They were not ours.
+func TestWatchdog_StandsDownWhenNodeUsesAnotherCNI(t *testing.T) {
+	// Identical setup in both arms; CNI ownership is the only variable.
+	setup := func(t *testing.T, owned bool) (*watchdog, *fakePodDeleter, *fakeClock) {
+		w, podTable, db, _, deleter, clock := newTestWatchdog(t, time.Minute)
+		w.cniOwned = func() (bool, string) {
+			if owned {
+				return true, "test: cilium-cni"
+			}
+			return false, "test: kube-router declares bridge, not cilium-cni"
+		}
+		// Several pods, none with an endpoint: exactly what a node running
+		// another CNI looks like to this watchdog.
+		for i, name := range []string{"inventx-front", "stz-test", "nginx-whoami", "redis"} {
+			insertPod(t, db, podTable,
+				runningPod(k8stypes.UID(name), "default", name,
+					netip.MustParseAddr("10.244.1.1").Next().String(), false))
+			_ = i
+		}
+		return w, deleter, clock
+	}
+
+	t.Run("other CNI: deletes nothing, ever", func(t *testing.T) {
+		w, deleter, clock := setup(t, false)
+		for range 5 {
+			require.NoError(t, w.check(context.Background()))
+			clock.Advance(time.Hour)
+		}
+		require.Empty(t, deleter.deleted,
+			"a pod that arrived through another CNI is not missing an endpoint, it is not ours")
+		require.Empty(t, w.pending,
+			"pods on a foreign-CNI node must not even enter the grace period")
+	})
+
+	t.Run("cilium-managed: still heals", func(t *testing.T) {
+		w, deleter, clock := setup(t, true)
+		require.NoError(t, w.check(context.Background()))
+		clock.Advance(time.Hour)
+		require.NoError(t, w.check(context.Background()))
+		require.NotEmpty(t, deleter.deleted,
+			"the gate must not disable healing on a node we do manage")
+	})
+}
+
+// The stand-down is a steady state on a node we do not manage, not an event,
+// so it must not reprint every scan interval for the life of the agent.
+func TestWatchdog_StandDownLogsOnce(t *testing.T) {
+	w, _, _, _, _, clock := newTestWatchdog(t, time.Minute)
+	calls := 0
+	w.cniOwned = func() (bool, string) { calls++; return false, "test: not ours" }
+
+	for range 4 {
+		require.NoError(t, w.check(context.Background()))
+		clock.Advance(time.Hour)
+	}
+	require.Equal(t, 4, calls, "ownership is re-evaluated every scan, so a migrated node recovers")
+	require.True(t, w.standDownLogged, "the message is latched after the first scan")
 }

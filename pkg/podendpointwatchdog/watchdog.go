@@ -39,6 +39,7 @@ type Config struct {
 	EnablePodEndpointWatchdog      bool
 	PodEndpointWatchdogInterval    time.Duration
 	PodEndpointWatchdogGracePeriod time.Duration
+	PodEndpointWatchdogCNIConfDir  string
 }
 
 func (c Config) Flags(flags *pflag.FlagSet) {
@@ -48,6 +49,8 @@ func (c Config) Flags(flags *pflag.FlagSet) {
 		"Interval between pod-endpoint watchdog scans")
 	flags.Duration("pod-endpoint-watchdog-grace-period", c.PodEndpointWatchdogGracePeriod,
 		"Minimum duration a pod must continuously observe as missing its Cilium endpoint before pod-endpoint watchdog heals it")
+	flags.String("pod-endpoint-watchdog-cni-conf-dir", c.PodEndpointWatchdogCNIConfDir,
+		"Directory holding this node's CNI configuration. The pod-endpoint watchdog only acts when a configuration here names cilium-cni, so it never deletes pods that arrived through another CNI")
 }
 
 // Cell registers the pod-endpoint watchdog.
@@ -59,6 +62,7 @@ var Cell = cell.Module(
 		EnablePodEndpointWatchdog:      true,
 		PodEndpointWatchdogInterval:    60 * time.Second,
 		PodEndpointWatchdogGracePeriod: 90 * time.Second,
+		PodEndpointWatchdogCNIConfDir:  DefaultCNIConfDir,
 	}),
 	cell.Invoke(registerWatchdog),
 )
@@ -113,6 +117,9 @@ func registerWatchdog(p params) {
 		gracePeriod: p.Config.PodEndpointWatchdogGracePeriod,
 		now:         time.Now,
 		pending:     make(map[k8stypes.UID]time.Time),
+		cniOwned: func() (bool, string) {
+			return nodeUsesCiliumCNI(p.Config.PodEndpointWatchdogCNIConfDir)
+		},
 	}
 
 	p.JobGroup.Add(job.OneShot("wait-for-endpoint-restore", func(ctx context.Context, _ cell.Health) error {
@@ -155,9 +162,34 @@ type watchdog struct {
 	// plane populates one reliably, and one that gets bumped by container
 	// restarts would silently defeat the grace period entirely.
 	pending map[k8stypes.UID]time.Time
+
+	// cniOwned reports whether this node's pods arrive through cilium-cni.
+	// The watchdog does nothing at all unless they do; see nodeUsesCiliumCNI.
+	cniOwned cniOwnership
+
+	// standDownLogged keeps the "not our CNI" message to once per process
+	// rather than once per scan interval, since it is a steady state on a
+	// node we do not manage, not an event.
+	standDownLogged bool
 }
 
 func (w *watchdog) check(ctx context.Context) error {
+	// Establish that this node's pods are ours before treating a missing
+	// endpoint as a fault. On a node running another CNI every pod-network
+	// pod looks broken, and healing them deletes another CNI's workloads in
+	// a loop.
+	if owned, reason := w.cniOwned(); !owned {
+		if !w.standDownLogged {
+			w.standDownLogged = true
+			w.logger.Info(
+				"Pod-endpoint watchdog standing down: this node's pods do not arrive through cilium-cni, "+
+					"so a pod without a local Cilium endpoint is not ours to heal",
+				logfields.Reason, reason,
+			)
+		}
+		return nil
+	}
+
 	txn := w.db.ReadTxn()
 	now := w.now()
 	seen := make(map[k8stypes.UID]struct{})
