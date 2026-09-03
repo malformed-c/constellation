@@ -66,6 +66,18 @@ agent:
 
 # inventx schedules the operator on the control-plane node.
 operator:
+  # Pin the kubeconfig paths explicitly rather than inheriting them. inventx is
+  # NOT k3s and NOT kubeadm: it runs the self-hosted perigeos control plane, and
+  # its kubeconfig lives here. Taken from the deployment that actually works,
+  # not guessed.
+  #
+  # This is pinned because inheriting it has already caused an outage: the chart
+  # once defaulted to /etc/rancher/k3s, the volume is declared type=Directory
+  # (which Kubernetes requires to exist), and the operator could not start. The
+  # version pin did not protect against it either -- the OCI chart tag was
+  # re-published with a different default underneath the same version.
+  kubeconfigDir: /etc/kubernetes/constellation
+  kubeconfigPath: /etc/kubernetes/constellation/kubeconfig
   nodeSelector:
     node-role.kubernetes.io/control-plane: "true"
   tolerations:

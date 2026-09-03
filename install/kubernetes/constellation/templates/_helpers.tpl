@@ -21,7 +21,7 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- else if .Values.k8sAPIServerURLs -}}
 kubernetes.default.svc
 {{- else -}}
-{{- fail "k8sServiceHost is required when k8sAPIServerURLs is not set (the API server VIP), e.g. --set k8sServiceHost=192.168.50.1" -}}
+{{- fail "k8sServiceHost is required when k8sAPIServerURLs is not set (the API server VIP), e.g. --set k8sServiceHost=10.0.0.1" -}}
 {{- end -}}
 {{- end -}}
 

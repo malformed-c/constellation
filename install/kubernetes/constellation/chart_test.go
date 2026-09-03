@@ -473,3 +473,44 @@ func TestAgentDaemonSet_CNIConfDirMatchesWatchdogDefault(t *testing.T) {
 	require.Equal(t, podendpointwatchdog.DefaultCNIConfDir, hostPath["path"],
 		"and that must be the host path perigeos writes the conflist to")
 }
+
+// TestChart_CarriesNoSiteSpecificValues keeps this chart deployable somewhere
+// other than the cluster it grew up on.
+//
+// The chart's documentation used to give our own control-plane addresses and
+// hostnames as the worked examples. That is worse than unhelpful once the
+// control plane moves: the helm release for this cluster still named
+// 192.168.50.1 and 192.168.100.200 after the API server had moved to another
+// host, so a `helm upgrade` would have pointed every agent at addresses that no
+// longer answer. Examples that look authoritative get copied.
+//
+// Site values belong in an overlay (examples/*.yaml) or on the command line,
+// never in the chart. This asserts the chart proper stays neutral; the overlay
+// files are deliberately not scanned, since being site-specific is their job.
+func TestChart_CarriesNoSiteSpecificValues(t *testing.T) {
+	// Hostnames and address ranges belonging to this particular fleet.
+	fingerprints := []string{
+		"engix99", "engifire", "engipi", "compute-09",
+		"192.168.50.", "192.168.100.",
+		"/home/engi",
+	}
+
+	var files []string
+	for _, pat := range []string{"values.yaml", "Chart.yaml", filepath.Join("templates", "*")} {
+		m, err := filepath.Glob(pat)
+		require.NoError(t, err)
+		files = append(files, m...)
+	}
+	require.NotEmpty(t, files, "sanity: found no chart files, this test would pass vacuously")
+
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			continue // directories and the like
+		}
+		for _, fp := range fingerprints {
+			require.NotContains(t, string(raw), fp,
+				"%s names %q; site values belong in an overlay, not the chart", f, fp)
+		}
+	}
+}

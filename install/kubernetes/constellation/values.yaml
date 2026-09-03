@@ -14,7 +14,7 @@
 namespace: kube-system
 
 # The API server the agent (kube-proxy replacement) and operator reach. REQUIRED.
-#   --set k8sServiceHost=192.168.50.1
+#   --set k8sServiceHost=10.0.0.1
 k8sServiceHost: ""
 k8sServicePort: "6443"
 
@@ -41,7 +41,7 @@ k8sServicePort: "6443"
 #   k8sAPIServerURLs:
 #     - https://127.0.0.1:6443                                    # tier 1: local
 #     - [https://10.0.0.1:6443, https://10.0.0.2:6443]            # tier 2: HA pair, spread
-#     - https://192.168.100.200:6443                              # tier 3: last resort
+#     - https://10.0.0.9:6443                                     # tier 3: last resort
 #
 # A bare string is just a one-member tier, so a flat list behaves exactly as
 # a strict preference order. Put the cheapest/most reliable path first - e.g.
@@ -49,7 +49,7 @@ k8sServicePort: "6443"
 # given host (loopback on a node that is not the control plane) fails fast
 # and rotates on, so one cluster-wide list can still suit hosts whose best
 # path differs.
-#   --set k8sAPIServerURLs[0]=https://192.168.50.1:6443 --set k8sAPIServerURLs[1]=https://192.168.100.200:6443
+#   --set k8sAPIServerURLs[0]=https://10.0.0.1:6443 --set k8sAPIServerURLs[1]=https://10.0.0.9:6443
 k8sAPIServerURLs: []
 
 # Agent runs on nodes matching nodeSelector, and (for the Constellation fork's
@@ -76,9 +76,9 @@ mtu: 0
 # remote node instead of the node's advertised InternalIP. A per-node
 # L2-reachability guard (isLocallyReachable) makes this safe to set cluster-wide:
 # a node that can't reach the IP silently keeps the default endpoint. Pins a
-# dual-homed pair onto their fast shared link, e.g. engifire->engix99 over
-# ethernet 192.168.50.1 instead of the slower shared-wifi InternalIP.
-#   tunnelEndpointOverrides: "engix99=192.168.50.1"
+# dual-homed pair onto their fast shared link, e.g. node-b->node-a over a
+# direct ethernet address instead of the slower shared InternalIP.
+#   tunnelEndpointOverrides: "node-a=10.1.0.1"
 tunnelEndpointOverrides: ""
 
 # Enable the BPF scale-to-zero datapath (SYN trap + flow tracking maps).
@@ -146,10 +146,23 @@ operator:
     requests:
       cpu: 25m
       memory: 128Mi
-  # The operator reaches the API server via the host k3s kubeconfig (it runs
+  # The operator reaches the API server via a kubeconfig on the host (it runs
   # hostNetwork on a node where in-cluster config isn't usable).
-  kubeconfigDir: /etc/rancher/k3s
-  kubeconfigPath: /etc/rancher/k3s/k3s.yaml
+  #
+  # Defaults to the standard kubeadm location. Any distribution that puts it
+  # elsewhere must override BOTH values -- k3s uses /etc/rancher/k3s/k3s.yaml,
+  # and the self-hosted perigeos control plane uses
+  # /etc/kubernetes/constellation/kubeconfig (see examples/inventx-values.yaml).
+  #
+  # Getting this wrong is not a soft failure: the volume is declared
+  # type=Directory, which Kubernetes requires to already exist, so the operator
+  # pod cannot start at all. This default was k3s until 2026-09-03 and that
+  # broke inventx, which is neither k3s nor kubeadm -- and a pinned chart
+  # version did NOT protect them, because the OCI tag was re-published with the
+  # changed default underneath it. Deployments should SET these, not inherit
+  # them.
+  kubeconfigDir: /etc/kubernetes
+  kubeconfigPath: /etc/kubernetes/admin.conf
   # Scheduling. Default: no hard nodeSelector, prefer the control-plane via
   # affinity, tolerate everything. Override nodeSelector to pin it.
   nodeSelector: {}
