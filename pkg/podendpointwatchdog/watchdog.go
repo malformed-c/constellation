@@ -36,16 +36,25 @@ import (
 
 const jobName = "pod-endpoint-watchdog"
 
-// minEligibleForBlastGuard is how many pods must be eligible before
-// "none of them has an endpoint" is read as a wrong premise rather than as
-// genuinely broken pods.
+// blastRadiusFloor and blastRadiusFraction bound how many pods one scan may
+// delete: max(floor, fraction of the node's pod-network pods).
 //
-// It cannot be 1: a node legitimately running a single pod that lost its
-// endpoint has zero healthy ones, and that is exactly the case the watchdog
-// exists to fix. It is small because the signature being caught is "the whole
-// node", not "a lot of pods" -- engifire had five. Below this the blast radius
-// is bounded by the count itself.
-const minEligibleForBlastGuard = 3
+// The floor cannot be below a small number: a node legitimately running one or
+// two pods that lost their endpoints has a high missing-fraction, and that is
+// the case the watchdog exists to fix. The fraction is what catches the shape
+// that actually hurt -- most or all of a node at once -- on nodes large enough
+// that a flat floor would be no protection at all.
+const (
+	blastRadiusFloor    = 3
+	blastRadiusFraction = 0.2
+)
+
+// blastRadiusLimit is the most pods a single scan may delete on a node with
+// the given number of pod-network pods.
+func blastRadiusLimit(eligible int) int {
+	byFraction := int(float64(eligible) * blastRadiusFraction)
+	return max(blastRadiusFloor, byFraction)
+}
 
 type Config struct {
 	EnablePodEndpointWatchdog      bool
@@ -288,12 +297,14 @@ func (w *watchdog) check(ctx context.Context) error {
 	//
 	// Not latched: this is an alarm, not a steady state, and it must keep
 	// saying so.
-	if eligible >= minEligibleForBlastGuard && healthy == 0 {
+	if limit := blastRadiusLimit(eligible); len(due) > limit {
 		w.logger.Error(
-			"Pod-endpoint watchdog refusing to act: NO pod on this node has a local Cilium endpoint, "+
-				"which indicates a wrong premise (pods not ours, or endpoint state missing) "+
-				"rather than every pod being individually broken",
-			logfields.Count, eligible,
+			"Pod-endpoint watchdog refusing to act: too many pods are missing their local Cilium "+
+				"endpoint at once, which indicates a wrong premise (pods not ours, or endpoint "+
+				"state missing) rather than each pod being individually broken",
+			logfields.Count, len(due),
+			logfields.Limit, limit,
+			logfields.Total, eligible,
 		)
 		return nil
 	}

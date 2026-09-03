@@ -315,14 +315,15 @@ func TestWatchdog_StandsDownWhenNodeUsesAnotherCNI(t *testing.T) {
 // The ownership gate has already been wrong once, on evidence that looked
 // conclusive. A stale node label, an unlabelled node, or perigeos crashing
 // between switching backends and updating the label all land in the same
-// place. So: even with ownership asserted, "not one pod on this node has an
-// endpoint" is a wrong premise, not N independently broken pods.
+// place. So a scan may delete at most max(3, 20% of the node's pod-network
+// pods): beyond that, the count itself says the premise is wrong rather than
+// that each pod is independently broken.
 func TestWatchdog_BlastRadiusGuard(t *testing.T) {
-	newNode := func(t *testing.T, pods int, healthy int) (*watchdog, *fakePodDeleter, *fakeClock) {
+	newNode := func(t *testing.T, pods, healthy int) (*watchdog, *fakePodDeleter, *fakeClock) {
 		w, podTable, db, eps, deleter, clock := newTestWatchdog(t, time.Minute)
 		w.cniOwned = func(context.Context) (bool, string) { return true, "test: ours" }
 		for i := range pods {
-			ip := fmt.Sprintf("10.244.2.%d", i+1)
+			ip := fmt.Sprintf("10.244.%d.%d", 2+i/250, 1+i%250)
 			insertPod(t, db, podTable,
 				runningPod(k8stypes.UID(fmt.Sprintf("p%d", i)), "default",
 					fmt.Sprintf("pod-%d", i), ip, false))
@@ -332,6 +333,17 @@ func TestWatchdog_BlastRadiusGuard(t *testing.T) {
 		}
 		return w, deleter, clock
 	}
+	run := func(t *testing.T, w *watchdog, clock *fakeClock) {
+		require.NoError(t, w.check(context.Background()))
+		clock.Advance(time.Hour)
+		require.NoError(t, w.check(context.Background()))
+	}
+
+	t.Run("limit is max(floor, fraction)", func(t *testing.T) {
+		require.Equal(t, 3, blastRadiusLimit(0), "floor applies to an empty node")
+		require.Equal(t, 3, blastRadiusLimit(5), "floor still dominates at small sizes")
+		require.Equal(t, 20, blastRadiusLimit(100), "fraction takes over once it exceeds the floor")
+	})
 
 	t.Run("whole node missing endpoints: refuses, repeatedly", func(t *testing.T) {
 		w, deleter, clock := newNode(t, 5, 0) // engifire's shape
@@ -340,25 +352,34 @@ func TestWatchdog_BlastRadiusGuard(t *testing.T) {
 			clock.Advance(time.Hour)
 		}
 		require.Empty(t, deleter.deleted,
-			"zero endpoints across the whole node is one broken assumption, not five broken pods")
+			"five of five missing is one broken assumption, not five broken pods")
 	})
 
-	t.Run("one endpoint standing: heals the rest", func(t *testing.T) {
-		w, deleter, clock := newNode(t, 5, 1)
-		require.NoError(t, w.check(context.Background()))
-		clock.Advance(time.Hour)
-		require.NoError(t, w.check(context.Background()))
-		require.Len(t, deleter.deleted, 4,
-			"a real post-restart endpoint loss leaves some endpoints standing; heal those that lost theirs")
+	// A flat floor would be no protection on a big node; the fraction is.
+	t.Run("large node, half missing: refuses", func(t *testing.T) {
+		w, deleter, clock := newNode(t, 100, 50)
+		run(t, w, clock)
+		require.Empty(t, deleter.deleted,
+			"50 of 100 exceeds the 20% limit even though half the node is healthy")
+	})
+
+	t.Run("large node, a few missing: heals them", func(t *testing.T) {
+		w, deleter, clock := newNode(t, 100, 92)
+		run(t, w, clock)
+		require.Len(t, deleter.deleted, 8, "8 of 100 is under the 20% limit")
 	})
 
 	t.Run("below the floor: a lone broken pod is still healed", func(t *testing.T) {
 		w, deleter, clock := newNode(t, 1, 0)
-		require.NoError(t, w.check(context.Background()))
-		clock.Advance(time.Hour)
-		require.NoError(t, w.check(context.Background()))
+		run(t, w, clock)
 		require.Len(t, deleter.deleted, 1,
 			"the guard must not disable the single-pod case the watchdog exists for")
+	})
+
+	t.Run("at the floor: three on a small node still healed", func(t *testing.T) {
+		w, deleter, clock := newNode(t, 5, 2)
+		run(t, w, clock)
+		require.Len(t, deleter.deleted, 3, "3 is not more than the floor of 3")
 	})
 }
 
