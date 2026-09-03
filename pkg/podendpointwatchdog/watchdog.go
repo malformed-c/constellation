@@ -141,6 +141,21 @@ func registerWatchdog(p params) {
 		pending:     make(map[k8stypes.UID]time.Time),
 		cniOwned: func(ctx context.Context) (bool, string) {
 			// Primary authority: what perigeos says it is ACTUALLY running.
+			//
+			// The LOCAL node, deliberately. CNI is a host-level property and
+			// every managed pawn shares the host's stack, so one label per host
+			// covers all its pawns and no pawn can be silently missed by a
+			// per-pod reading. Perigeos labels the pawns too, so both readings
+			// agree; this one does not depend on that.
+			//
+			// Note this is the SECOND mechanism keeping the watchdog off a node
+			// that is not ours, and the first is easy to lose: the DaemonSet
+			// pins kubernetes.io/arch=amd64, which is the only reason no agent
+			// lands on engipi -- engipi carries peri.apsis/primary=true and is
+			// arm64. Loosen that selector and an agent arrives on a node
+			// perigeos reports as builtin; this gate then keeps the watchdog
+			// off there on its own, without anyone having to remember why the
+			// arch pin mattered.
 			ln, err := p.LocalNodeStore.Get(ctx)
 			if err != nil {
 				return false, fmt.Sprintf("cannot read local node: %v", err)
