@@ -124,7 +124,14 @@ func cniPluginTypes(raw []byte) ([]string, error) {
 
 // CNIProviderLabel is the node label perigeos publishes to declare which CNI
 // backend it is ACTUALLY routing pods through on that host. Values are
-// constellation | standard | builtin.
+// constellation | standard | builtin | pending, where pending means perigeos
+// is waiting for a CNI and routing nothing -- deliberately distinct from
+// standard, and equally not ours.
+//
+// perigeos DERIVES this from the live backend on every node-status cycle
+// rather than writing it at switch time, so the label cannot lead the backend
+// and there is no write order to get wrong. A promotion therefore shows up
+// within one cycle; this gate re-reads every scan to match.
 //
 // This, not the presence of a config file, is the watchdog's authority. A
 // conflist sitting in a provider subdirectory says only that perigeos once

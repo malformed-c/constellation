@@ -97,9 +97,12 @@ func TestNodeLabelSaysCilium(t *testing.T) {
 		labels map[string]string
 		want   bool
 	}{
-		"constellation":     {map[string]string{CNIProviderLabel: "constellation"}, true},
-		"standard":          {map[string]string{CNIProviderLabel: "standard"}, false},
-		"builtin":           {map[string]string{CNIProviderLabel: "builtin"}, false},
+		"constellation": {map[string]string{CNIProviderLabel: "constellation"}, true},
+		"standard":      {map[string]string{CNIProviderLabel: "standard"}, false},
+		"builtin":       {map[string]string{CNIProviderLabel: "builtin"}, false},
+		// pending = perigeos is waiting for a CNI and routing nothing. A real
+		// documented value, not an unknown one, so it is asserted by name.
+		"pending":           {map[string]string{CNIProviderLabel: "pending"}, false},
 		"absent":            {map[string]string{"peri.apsis/host": "engix99"}, false},
 		"empty value":       {map[string]string{CNIProviderLabel: ""}, false},
 		"nil labels":        {nil, false},
