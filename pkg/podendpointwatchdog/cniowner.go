@@ -55,8 +55,12 @@ func nodeUsesCiliumCNI(confDir string) (bool, string) {
 		return false, fmt.Sprintf("cannot read CNI config directory %s: %v", confDir, err)
 	}
 
-	// CNI selects the lexically first configuration in a directory, so match
-	// that ordering rather than whatever order the filesystem returns.
+	// Sorted only so the reported reason is stable across runs. Do NOT read
+	// this as "the lexically first config wins": that is how a runtime picks
+	// among configs in ONE directory, and perigeos does not do that -- it
+	// selects a PROVIDER DIRECTORY from its own config and points the runtime
+	// at it. Inside that directory the question is simply whether a cilium
+	// configuration is present, so every file is checked.
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
@@ -72,6 +76,7 @@ func nodeUsesCiliumCNI(confDir string) (bool, string) {
 		return false, fmt.Sprintf("no CNI configuration in %s", confDir)
 	}
 
+	var seen []string
 	for _, name := range names {
 		path := filepath.Join(confDir, name)
 		raw, err := os.ReadFile(path)
@@ -85,13 +90,14 @@ func nodeUsesCiliumCNI(confDir string) (bool, string) {
 		if slices.Contains(types, ciliumCNIPluginName) {
 			return true, fmt.Sprintf("%s declares %s", path, ciliumCNIPluginName)
 		}
-		// The first readable configuration is the one the runtime would use;
-		// if it is not ours, do not keep looking for a stale file that is.
-		return false, fmt.Sprintf("%s declares %s, not %s",
-			path, strings.Join(types, ","), ciliumCNIPluginName)
+		seen = append(seen, fmt.Sprintf("%s=%s", name, strings.Join(types, ",")))
 	}
 
-	return false, fmt.Sprintf("no readable CNI configuration in %s", confDir)
+	if len(seen) == 0 {
+		return false, fmt.Sprintf("no readable CNI configuration in %s", confDir)
+	}
+	return false, fmt.Sprintf("no configuration in %s declares %s (found %s)",
+		confDir, ciliumCNIPluginName, strings.Join(seen, " "))
 }
 
 // cniPluginTypes extracts the plugin type(s) from either a .conflist (a
@@ -141,9 +147,28 @@ func cniPluginTypes(raw []byte) ([]string, error) {
 // nobody else can derive.
 const CNIProviderLabel = "peri.apsis/cni-provider"
 
-// CNIProviderConstellation is the only CNIProviderLabel value that makes a
-// node's pods ours to heal.
-const CNIProviderConstellation = "constellation"
+// The CNIProviderLabel values perigeos publishes. Only constellation makes a
+// node's pods ours to heal; the rest are recorded so that a value outside the
+// contract can be told apart from one inside it.
+const (
+	CNIProviderConstellation = "constellation"
+	CNIProviderStandard      = "standard"
+	CNIProviderBuiltin       = "builtin"
+	CNIProviderPending       = "pending"
+)
+
+// knownCNIProviders is the agreed value set. Membership changes nothing about
+// whether we act -- anything that is not constellation is not ours either way
+// -- but it changes what the log says, and that is the difference between "this
+// node runs another CNI, as expected" and "perigeos is emitting a value this
+// build has never heard of". The second is a contract drift someone needs to
+// see; without this it reads identically to the first.
+var knownCNIProviders = map[string]struct{}{
+	CNIProviderConstellation: {},
+	CNIProviderStandard:      {},
+	CNIProviderBuiltin:       {},
+	CNIProviderPending:       {},
+}
 
 // nodeLabelSaysCilium reports whether the local node declares constellation as
 // its live CNI backend.
@@ -156,10 +181,28 @@ func nodeLabelSaysCilium(labels map[string]string) (bool, string) {
 	switch {
 	case !ok:
 		return false, fmt.Sprintf("node label %s is absent", CNIProviderLabel)
-	case v != CNIProviderConstellation:
-		return false, fmt.Sprintf("node label %s=%q, not %q",
-			CNIProviderLabel, v, CNIProviderConstellation)
-	default:
+	case v == CNIProviderConstellation:
 		return true, fmt.Sprintf("node label %s=%s", CNIProviderLabel, v)
+	default:
+		if _, known := knownCNIProviders[v]; known {
+			return false, fmt.Sprintf("node label %s=%s, not %s",
+				CNIProviderLabel, v, CNIProviderConstellation)
+		}
+		// Still not ours -- unrecognised is never a reason to act -- but say
+		// so differently, because this one means the contract has moved.
+		return false, fmt.Sprintf(
+			"node label %s=%q is not a recognised CNI provider value (expected one of %s); "+
+				"treating as not ours",
+			CNIProviderLabel, v, strings.Join(sortedProviders(), ", "))
 	}
+}
+
+// sortedProviders lists the agreed values in a stable order for log messages.
+func sortedProviders() []string {
+	out := make([]string, 0, len(knownCNIProviders))
+	for k := range knownCNIProviders {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }

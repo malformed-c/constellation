@@ -53,16 +53,31 @@ func TestNodeUsesCiliumCNI(t *testing.T) {
 		require.True(t, owned)
 	})
 
-	// CNI picks the lexically first configuration. A leftover cilium file
-	// sitting behind another CNI's active one must not read as ownership.
-	t.Run("lexically first config wins", func(t *testing.T) {
+	// This directory is a PROVIDER dir that perigeos points the runtime at, not
+	// a directory the runtime picks among. So a cilium config anywhere in it
+	// counts, regardless of filename order. The earlier version of this test
+	// asserted the opposite -- that the lexically first file wins -- which
+	// encoded a selection perigeos does not perform, and would have reported
+	// "not ours" for a correctly-configured node that happened to have another
+	// file sorting first.
+	t.Run("cilium config counts regardless of filename order", func(t *testing.T) {
 		dir := t.TempDir()
-		writeConf(t, dir, "05-kube-router.conflist", bridgeConflist)
+		writeConf(t, dir, "05-other.conflist", bridgeConflist)
 		writeConf(t, dir, "99-constellation.conflist", ciliumConflist)
 		owned, reason := nodeUsesCiliumCNI(dir)
-		require.False(t, owned,
-			"a stale cilium conflist behind another CNI's active one is not ownership")
-		require.Contains(t, reason, "05-kube-router")
+		require.True(t, owned, reason)
+		require.Contains(t, reason, "99-constellation")
+	})
+
+	// And the negative still holds: a provider dir with no cilium config at
+	// all is not ours, and the reason names what it did find.
+	t.Run("provider dir with no cilium config: not owned", func(t *testing.T) {
+		dir := t.TempDir()
+		writeConf(t, dir, "05-other.conflist", bridgeConflist)
+		writeConf(t, dir, "10-more.conflist", bridgeConflist)
+		owned, reason := nodeUsesCiliumCNI(dir)
+		require.False(t, owned)
+		require.Contains(t, reason, "bridge", "the reason must name what was actually there")
 	})
 
 	// Not establishing ownership must read as "not ours": the cost of a wrong
@@ -115,5 +130,26 @@ func TestNodeLabelSaysCilium(t *testing.T) {
 			require.Equal(t, tc.want, got, reason)
 			require.NotEmpty(t, reason, "the reason is what makes a stand-down diagnosable")
 		})
+	}
+}
+
+// Whether we act is the same for every non-constellation value: we do not. But
+// a value INSIDE the agreed set and one outside it mean different things to
+// whoever reads the log -- "this node runs another CNI" versus "perigeos is
+// emitting something this build has never heard of" -- and the second is a
+// contract drift that would otherwise be invisible.
+func TestNodeLabelSaysCilium_UnknownValueIsCalledOut(t *testing.T) {
+	for _, v := range []string{CNIProviderStandard, CNIProviderBuiltin, CNIProviderPending} {
+		owned, reason := nodeLabelSaysCilium(map[string]string{CNIProviderLabel: v})
+		require.False(t, owned)
+		require.NotContains(t, reason, "not a recognised",
+			"%s is in the contract and must not be reported as drift", v)
+	}
+
+	owned, reason := nodeLabelSaysCilium(map[string]string{CNIProviderLabel: "kube-router"})
+	require.False(t, owned, "an unrecognised value is never a reason to act")
+	require.Contains(t, reason, "not a recognised CNI provider value")
+	for _, v := range []string{"builtin", "constellation", "pending", "standard"} {
+		require.Contains(t, reason, v, "the message must list what was expected")
 	}
 }

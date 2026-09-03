@@ -16,13 +16,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/client-go/tools/clientcmd"
 
 	ciliumclient "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/client"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/time"
 )
 
 func main() {
