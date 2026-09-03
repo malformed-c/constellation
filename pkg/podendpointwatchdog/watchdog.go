@@ -29,11 +29,23 @@ import (
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	"github.com/cilium/cilium/pkg/k8s/tables"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/promise"
 	"github.com/cilium/cilium/pkg/time"
 )
 
 const jobName = "pod-endpoint-watchdog"
+
+// minEligibleForBlastGuard is how many pods must be eligible before
+// "none of them has an endpoint" is read as a wrong premise rather than as
+// genuinely broken pods.
+//
+// It cannot be 1: a node legitimately running a single pod that lost its
+// endpoint has zero healthy ones, and that is exactly the case the watchdog
+// exists to fix. It is small because the signature being caught is "the whole
+// node", not "a lot of pods" -- engifire had five. Below this the blast radius
+// is bounded by the count itself.
+const minEligibleForBlastGuard = 3
 
 type Config struct {
 	EnablePodEndpointWatchdog      bool
@@ -98,6 +110,7 @@ type params struct {
 	PodTable statedb.Table[tables.LocalPod]
 
 	EndpointManager endpointmanager.EndpointManager
+	LocalNodeStore  *node.LocalNodeStore
 	Clientset       k8sClient.Clientset
 
 	RestorerPromise promise.Promise[endpointstate.Restorer]
@@ -117,8 +130,24 @@ func registerWatchdog(p params) {
 		gracePeriod: p.Config.PodEndpointWatchdogGracePeriod,
 		now:         time.Now,
 		pending:     make(map[k8stypes.UID]time.Time),
-		cniOwned: func() (bool, string) {
-			return nodeUsesCiliumCNI(p.Config.PodEndpointWatchdogCNIConfDir)
+		cniOwned: func(ctx context.Context) (bool, string) {
+			// Primary authority: what perigeos says it is ACTUALLY running.
+			ln, err := p.LocalNodeStore.Get(ctx)
+			if err != nil {
+				return false, fmt.Sprintf("cannot read local node: %v", err)
+			}
+			owned, reason := nodeLabelSaysCilium(ln.Labels)
+			if !owned {
+				return false, reason
+			}
+			// Secondary, never sole: the conflist must also be there. Guards a
+			// label left behind after the backend moved on. Named separately in
+			// the log so a silent disable from a path change is diagnosable
+			// rather than looking like an honest "not ours".
+			if ok, why := nodeUsesCiliumCNI(p.Config.PodEndpointWatchdogCNIConfDir); !ok {
+				return false, fmt.Sprintf("%s but %s", reason, why)
+			}
+			return true, reason
 		},
 	}
 
@@ -178,7 +207,7 @@ func (w *watchdog) check(ctx context.Context) error {
 	// endpoint as a fault. On a node running another CNI every pod-network
 	// pod looks broken, and healing them deletes another CNI's workloads in
 	// a loop.
-	if owned, reason := w.cniOwned(); !owned {
+	if owned, reason := w.cniOwned(ctx); !owned {
 		if !w.standDownLogged {
 			w.standDownLogged = true
 			w.logger.Info(
@@ -193,6 +222,15 @@ func (w *watchdog) check(ctx context.Context) error {
 	txn := w.db.ReadTxn()
 	now := w.now()
 	seen := make(map[k8stypes.UID]struct{})
+
+	// eligible = pods that could have a local endpoint; healthy = those that
+	// do. due = those past the grace period, healed only if the guard below
+	// agrees the premise holds.
+	var (
+		eligible int
+		healthy  int
+		due      []tables.LocalPod
+	)
 
 	for pod := range w.podTable.All(txn) {
 		if pod.Spec.HostNetwork {
@@ -212,7 +250,9 @@ func (w *watchdog) check(ctx context.Context) error {
 		if err != nil {
 			continue
 		}
+		eligible++
 		if w.endpoints.LookupIP(addr) != nil {
+			healthy++
 			continue // healthy
 		}
 
@@ -228,8 +268,38 @@ func (w *watchdog) check(ctx context.Context) error {
 			continue
 		}
 		if now.Sub(firstSeen) >= w.gracePeriod {
-			w.heal(ctx, pod)
+			due = append(due, pod)
 		}
+	}
+
+	// BLAST RADIUS GUARD, deliberately independent of the ownership gate.
+	//
+	// The gate was wrong once (a conflist that existed but was not in use) and
+	// can be wrong again: a stale node label, an unlabelled node, perigeos
+	// crashing between switching backends and updating the label. Every one of
+	// those ends in the same place unless something bounds the damage.
+	//
+	// If NOT ONE pod on this node has an endpoint, that is not N broken pods,
+	// it is one broken assumption -- either these pods are not ours, or the
+	// endpoint manager itself is empty. Deleting every workload on the node is
+	// the wrong response to both. A genuine post-restart endpoint loss leaves
+	// some endpoints standing; engifire had none, and lost four workloads plus
+	// a probe in three minutes.
+	//
+	// Not latched: this is an alarm, not a steady state, and it must keep
+	// saying so.
+	if eligible >= minEligibleForBlastGuard && healthy == 0 {
+		w.logger.Error(
+			"Pod-endpoint watchdog refusing to act: NO pod on this node has a local Cilium endpoint, "+
+				"which indicates a wrong premise (pods not ours, or endpoint state missing) "+
+				"rather than every pod being individually broken",
+			logfields.Count, eligible,
+		)
+		return nil
+	}
+
+	for _, pod := range due {
+		w.heal(ctx, pod)
 	}
 
 	// Forget any pod that's no longer missing its endpoint (healed itself,

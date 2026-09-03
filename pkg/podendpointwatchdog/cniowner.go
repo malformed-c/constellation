@@ -4,6 +4,7 @@
 package podendpointwatchdog
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,8 +23,9 @@ const ciliumCNIPluginName = "cilium-cni"
 const DefaultCNIConfDir = "/etc/cni/net.d/constellation"
 
 // cniOwnership reports whether this node's pods are supposed to arrive through
-// cilium-cni, plus a human-readable reason for the answer.
-type cniOwnership func() (bool, string)
+// cilium-cni, plus a human-readable reason for the answer. The reason is what
+// makes a stand-down diagnosable rather than a silent no-op.
+type cniOwnership func(ctx context.Context) (bool, string)
 
 // nodeUsesCiliumCNI reports whether confDir contains a CNI configuration naming
 // cilium-cni as a plugin.
@@ -118,4 +120,39 @@ func cniPluginTypes(raw []byte) ([]string, error) {
 		return nil, fmt.Errorf("no plugin type found")
 	}
 	return types, nil
+}
+
+// CNIProviderLabel is the node label perigeos publishes to declare which CNI
+// backend it is ACTUALLY routing pods through on that host. Values are
+// constellation | standard | builtin.
+//
+// This, not the presence of a config file, is the watchdog's authority. A
+// conflist sitting in a provider subdirectory says only that perigeos once
+// wrote it; on engifire a constellation.conflist sat unused under another
+// backend, so a file-presence check answers "yes" on precisely the node where
+// acting is catastrophic. Which backend is live is a fact perigeos knows and
+// nobody else can derive.
+const CNIProviderLabel = "peri.apsis/cni-provider"
+
+// CNIProviderConstellation is the only CNIProviderLabel value that makes a
+// node's pods ours to heal.
+const CNIProviderConstellation = "constellation"
+
+// nodeLabelSaysCilium reports whether the local node declares constellation as
+// its live CNI backend.
+//
+// Absent, empty, or any other value means NOT ours. That covers a node running
+// another backend, a node perigeos has not labelled yet, and a node whose
+// perigeos predates the contract - all of which must be left alone.
+func nodeLabelSaysCilium(labels map[string]string) (bool, string) {
+	v, ok := labels[CNIProviderLabel]
+	switch {
+	case !ok:
+		return false, fmt.Sprintf("node label %s is absent", CNIProviderLabel)
+	case v != CNIProviderConstellation:
+		return false, fmt.Sprintf("node label %s=%q, not %q",
+			CNIProviderLabel, v, CNIProviderConstellation)
+	default:
+		return true, fmt.Sprintf("node label %s=%s", CNIProviderLabel, v)
+	}
 }

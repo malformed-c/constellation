@@ -86,3 +86,31 @@ func TestNodeUsesCiliumCNI(t *testing.T) {
 		require.False(t, owned)
 	})
 }
+
+// The primary authority: what perigeos says it is ACTUALLY running.
+//
+// Everything that is not exactly "constellation" must read as not ours -- that
+// is what covers a node on another backend, a node perigeos has not labelled
+// yet, and a node whose perigeos predates this contract.
+func TestNodeLabelSaysCilium(t *testing.T) {
+	for name, tc := range map[string]struct {
+		labels map[string]string
+		want   bool
+	}{
+		"constellation":     {map[string]string{CNIProviderLabel: "constellation"}, true},
+		"standard":          {map[string]string{CNIProviderLabel: "standard"}, false},
+		"builtin":           {map[string]string{CNIProviderLabel: "builtin"}, false},
+		"absent":            {map[string]string{"peri.apsis/host": "engix99"}, false},
+		"empty value":       {map[string]string{CNIProviderLabel: ""}, false},
+		"nil labels":        {nil, false},
+		"unknown value":     {map[string]string{CNIProviderLabel: "something-new"}, false},
+		"case must match":   {map[string]string{CNIProviderLabel: "Constellation"}, false},
+		"no leading spaces": {map[string]string{CNIProviderLabel: " constellation"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, reason := nodeLabelSaysCilium(tc.labels)
+			require.Equal(t, tc.want, got, reason)
+			require.NotEmpty(t, reason, "the reason is what makes a stand-down diagnosable")
+		})
+	}
+}

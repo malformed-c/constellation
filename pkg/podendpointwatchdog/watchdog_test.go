@@ -6,7 +6,9 @@ package podendpointwatchdog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/cilium/hive/hivetest"
@@ -76,7 +78,7 @@ func newTestWatchdog(t *testing.T, gracePeriod time.Duration) (*watchdog, stated
 		// Existing tests exercise the healing logic, so they run as a
 		// cilium-managed node. The gate itself is covered separately by
 		// TestCheck_StandsDownWhenNodeUsesAnotherCNI.
-		cniOwned: func() (bool, string) { return true, "test: cilium-managed" },
+		cniOwned: func(context.Context) (bool, string) { return true, "test: cilium-managed" },
 	}
 	return w, podTable, db, eps, deleter, clock
 }
@@ -253,7 +255,7 @@ func TestWatchdog_DeleteErrorDoesNotFailCheck(t *testing.T) {
 	require.Equal(t, []string{"default/delete-fails"}, deleter.deleted)
 }
 
-// The engifire regression, both arms.
+// The engifire regression: ownership, isolated.
 //
 // On 2026-09-03 the DaemonSet landed on a node where perigeos still ran the
 // kube-router/bridge conflist. No pod there had a Cilium endpoint, so every
@@ -262,23 +264,25 @@ func TestWatchdog_DeleteErrorDoesNotFailCheck(t *testing.T) {
 // again. Four workloads plus a probe went in about three minutes, then looped.
 //
 // The pods were never broken. They were not ours.
+//
+// Both arms keep two HEALTHY pods so the blast-radius guard stays silent and
+// CNI ownership is the only variable; the guard has its own test below.
 func TestWatchdog_StandsDownWhenNodeUsesAnotherCNI(t *testing.T) {
-	// Identical setup in both arms; CNI ownership is the only variable.
 	setup := func(t *testing.T, owned bool) (*watchdog, *fakePodDeleter, *fakeClock) {
-		w, podTable, db, _, deleter, clock := newTestWatchdog(t, time.Minute)
-		w.cniOwned = func() (bool, string) {
+		w, podTable, db, eps, deleter, clock := newTestWatchdog(t, time.Minute)
+		w.cniOwned = func(context.Context) (bool, string) {
 			if owned {
 				return true, "test: cilium-cni"
 			}
-			return false, "test: kube-router declares bridge, not cilium-cni"
+			return false, "test: node label says standard, not constellation"
 		}
-		// Several pods, none with an endpoint: exactly what a node running
-		// another CNI looks like to this watchdog.
-		for i, name := range []string{"inventx-front", "stz-test", "nginx-whoami", "redis"} {
+		for i, name := range []string{"healthy-a", "healthy-b", "inventx-front", "stz-test"} {
+			ip := fmt.Sprintf("10.244.1.%d", i+1)
 			insertPod(t, db, podTable,
-				runningPod(k8stypes.UID(name), "default", name,
-					netip.MustParseAddr("10.244.1.1").Next().String(), false))
-			_ = i
+				runningPod(k8stypes.UID(name), "default", name, ip, false))
+			if strings.HasPrefix(name, "healthy") {
+				eps.byIP[ip] = &endpoint.Endpoint{}
+			}
 		}
 		return w, deleter, clock
 	}
@@ -300,8 +304,61 @@ func TestWatchdog_StandsDownWhenNodeUsesAnotherCNI(t *testing.T) {
 		require.NoError(t, w.check(context.Background()))
 		clock.Advance(time.Hour)
 		require.NoError(t, w.check(context.Background()))
-		require.NotEmpty(t, deleter.deleted,
+		require.ElementsMatch(t,
+			[]string{"default/inventx-front", "default/stz-test"}, deleter.deleted,
 			"the gate must not disable healing on a node we do manage")
+	})
+}
+
+// The guard that holds when the gate is wrong.
+//
+// The ownership gate has already been wrong once, on evidence that looked
+// conclusive. A stale node label, an unlabelled node, or perigeos crashing
+// between switching backends and updating the label all land in the same
+// place. So: even with ownership asserted, "not one pod on this node has an
+// endpoint" is a wrong premise, not N independently broken pods.
+func TestWatchdog_BlastRadiusGuard(t *testing.T) {
+	newNode := func(t *testing.T, pods int, healthy int) (*watchdog, *fakePodDeleter, *fakeClock) {
+		w, podTable, db, eps, deleter, clock := newTestWatchdog(t, time.Minute)
+		w.cniOwned = func(context.Context) (bool, string) { return true, "test: ours" }
+		for i := range pods {
+			ip := fmt.Sprintf("10.244.2.%d", i+1)
+			insertPod(t, db, podTable,
+				runningPod(k8stypes.UID(fmt.Sprintf("p%d", i)), "default",
+					fmt.Sprintf("pod-%d", i), ip, false))
+			if i < healthy {
+				eps.byIP[ip] = &endpoint.Endpoint{}
+			}
+		}
+		return w, deleter, clock
+	}
+
+	t.Run("whole node missing endpoints: refuses, repeatedly", func(t *testing.T) {
+		w, deleter, clock := newNode(t, 5, 0) // engifire's shape
+		for range 4 {
+			require.NoError(t, w.check(context.Background()))
+			clock.Advance(time.Hour)
+		}
+		require.Empty(t, deleter.deleted,
+			"zero endpoints across the whole node is one broken assumption, not five broken pods")
+	})
+
+	t.Run("one endpoint standing: heals the rest", func(t *testing.T) {
+		w, deleter, clock := newNode(t, 5, 1)
+		require.NoError(t, w.check(context.Background()))
+		clock.Advance(time.Hour)
+		require.NoError(t, w.check(context.Background()))
+		require.Len(t, deleter.deleted, 4,
+			"a real post-restart endpoint loss leaves some endpoints standing; heal those that lost theirs")
+	})
+
+	t.Run("below the floor: a lone broken pod is still healed", func(t *testing.T) {
+		w, deleter, clock := newNode(t, 1, 0)
+		require.NoError(t, w.check(context.Background()))
+		clock.Advance(time.Hour)
+		require.NoError(t, w.check(context.Background()))
+		require.Len(t, deleter.deleted, 1,
+			"the guard must not disable the single-pod case the watchdog exists for")
 	})
 }
 
@@ -310,7 +367,7 @@ func TestWatchdog_StandsDownWhenNodeUsesAnotherCNI(t *testing.T) {
 func TestWatchdog_StandDownLogsOnce(t *testing.T) {
 	w, _, _, _, _, clock := newTestWatchdog(t, time.Minute)
 	calls := 0
-	w.cniOwned = func() (bool, string) { calls++; return false, "test: not ours" }
+	w.cniOwned = func(context.Context) (bool, string) { calls++; return false, "test: not ours" }
 
 	for range 4 {
 		require.NoError(t, w.check(context.Background()))
